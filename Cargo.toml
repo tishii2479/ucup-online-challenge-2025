@@ -1,0 +1,7 @@
+[package]
+name = "ucup-2025"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ahc-library = { version = "0.1.0", path = "../ahc-library/ahc-library" }
