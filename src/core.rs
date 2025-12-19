@@ -7,10 +7,10 @@ use std::{
 };
 
 pub const N_SUBTASK: usize = 5;
-pub const N_PACKET: usize = 7;
+pub const N_PACKET_TYPE: usize = 7;
 pub const N_NODE: usize = 20;
 pub const N_SPECIAL: usize = 8;
-pub const SPECIAL_NODE_ID: usize = 8;
+pub const SPECIAL_NODE_ID: usize = 8 - 1; // 0-indexed
 pub const LAST_PACKET_T: i64 = 5_000_000;
 
 #[derive(Debug, Clone)]
@@ -60,6 +60,28 @@ pub struct Input {
     pub cost_r: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct Score {
+    pub throughput: f64,
+    pub timeout_rate: f64,
+}
+
+impl Score {
+    pub fn to_score(&self) -> f64 {
+        (self.throughput - 1e4 * self.timeout_rate) * 1e2
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskLog {
+    pub core_id: usize,
+    pub start_t: i64,
+    pub end_t: i64,
+    pub batch_size: usize,
+    pub packet_type: usize,
+    pub path_index: usize,
+}
+
 pub struct Tester<'a, I: Interactor> {
     pub n: usize,
     pub input: Input,
@@ -69,7 +91,9 @@ pub struct Tester<'a, I: Interactor> {
     packet_works: Vec<Option<[bool; N_SPECIAL]>>,
     packet_history: Vec<Vec<PacketHistory>>,
     core_last_t: Vec<i64>,
+    core0_last_t: i64,
     last_t: i64,
+    pub task_logs: Vec<TaskLog>,
 }
 
 impl<'a, I: Interactor> Tester<'a, I> {
@@ -83,12 +107,14 @@ impl<'a, I: Interactor> Tester<'a, I> {
             packets: vec![None; n],
             packet_works: vec![None; n],
             packet_history: vec![vec![]; n],
-            core_last_t: vec![1; num_cores + 1], // 0 is used for core 0
+            core_last_t: vec![1; num_cores],
+            core0_last_t: 0,
             last_t: 0,
+            task_logs: Vec::with_capacity(n * 32),
         }
     }
 
-    pub fn calc_score(&self) -> i64 {
+    pub fn calc_score(&self) -> Score {
         let mut max_departure = 0;
         let mut min_arrive = i64::MAX;
         let mut timeout_packets = 0;
@@ -97,7 +123,7 @@ impl<'a, I: Interactor> Tester<'a, I> {
             let arrive = packet.arrive;
             min_arrive = min_arrive.min(arrive);
 
-            let path_len = self.graph.paths[packet.i].l;
+            let path_len = self.graph.paths[packet.packet_type].l;
             let path_history = &self.packet_history[i];
             assert_eq!(
                 path_history.len(),
@@ -117,8 +143,10 @@ impl<'a, I: Interactor> Tester<'a, I> {
         let throughput = ((self.n - 1) as f64 * 1e6)
             / (self.input.n_cores as f64 * (max_departure - min_arrive) as f64);
         let timeout_rate = (timeout_packets as f64) / (self.n as f64);
-        let score = (throughput - 1e4 * timeout_rate) * 1e2;
-        score.ceil().max(0.) as i64
+        Score {
+            throughput,
+            timeout_rate,
+        }
     }
 
     pub fn send_receive_packets(&mut self, t: i64) -> Vec<Packet> {
@@ -129,14 +157,13 @@ impl<'a, I: Interactor> Tester<'a, I> {
         );
         self.last_t = t;
 
-        let core0_last_t = self.core_last_t[0];
         assert!(
-            t >= core0_last_t,
+            t >= self.core0_last_t,
             "core 0 is busy until {}, but ReceivePacket requested at {}",
-            core0_last_t,
+            self.core0_last_t,
             t
         );
-        self.core_last_t[0] = t + self.input.cost_r;
+        self.core0_last_t = t + self.input.cost_r;
 
         let (_, packets) = self.interactor.send_receive_packet(t);
         for packet in packets.iter().cloned() {
@@ -171,21 +198,22 @@ impl<'a, I: Interactor> Tester<'a, I> {
         let mut num_switches = 0;
         for id in ids.iter() {
             let packet = self.packets[*id].as_ref().unwrap();
-            let j = self.packet_history[*id].len();
+            let next_path_index = self.packet_history[*id].len();
             let last_t = self.packet_history[*id]
                 .last()
                 .map_or(0, |history| history.end_t);
             assert!(
                 t >= last_t,
-                "packet {} is busy until {}, but task starts at {}",
+                "packet {} is busy until {}, but task starts at {}, history: {:?}",
                 id,
                 last_t,
-                t
+                t,
+                self.packet_history[*id]
             );
 
-            let next_node = *self.graph.paths[packet.i]
+            let next_node = *self.graph.paths[packet.packet_type]
                 .path
-                .get(j + 1)
+                .get(next_path_index)
                 .expect("packet has already finished its path, but still assigned to a task");
             assert_eq!(
                 node_id, next_node,
@@ -237,6 +265,18 @@ impl<'a, I: Interactor> Tester<'a, I> {
         }
         self.core_last_t[core_id] = t + t_a;
 
+        self.task_logs.push(TaskLog {
+            core_id,
+            start_t: t,
+            end_t: t + t_a,
+            batch_size: ids.len(),
+            packet_type: self.packets[ids[0]]
+                .as_ref()
+                .expect("packet should be received")
+                .packet_type,
+            path_index: self.packet_history[ids[0]].len() - 1,
+        });
+
         self.interactor.send_execute(t, core_id, node_id, s, ids);
     }
 
@@ -264,7 +304,7 @@ impl<'a, I: Interactor> Tester<'a, I> {
         res
     }
 
-    pub fn send_finish(&mut self) -> i64 {
+    pub fn send_finish(&mut self) -> Score {
         let score = self.calc_score();
         self.interactor.send_finish();
         score
@@ -340,8 +380,8 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn read_graph(&mut self) -> Graph {
-        let mut paths = Vec::with_capacity(N_PACKET);
-        for _ in 0..N_PACKET {
+        let mut paths = Vec::with_capacity(N_PACKET_TYPE);
+        for _ in 0..N_PACKET_TYPE {
             let line = self.io.read_line();
             let mut parts = line.split_whitespace();
             let l = parts.next().unwrap().parse::<usize>().unwrap();
@@ -357,10 +397,11 @@ impl<I: IO> Interactor for IOInteractor<I> {
             let line = self.io.read_line();
             let mut parts = line.split_whitespace();
             let b = parts.next().unwrap().parse::<usize>().unwrap();
-            let costs = parts
+            let mut costs = parts
                 .take(b)
                 .map(|x| x.parse::<i64>().unwrap())
                 .collect::<Vec<_>>();
+            costs.insert(0, 0); // add cost for 0 packets
             nodes.push(Node { costs });
         }
 
@@ -402,9 +443,9 @@ impl<I: IO> Interactor for IOInteractor<I> {
         for _ in 0..p {
             let line = self.io.read_line();
             let mut parts = line.split_whitespace();
-            let i = parts.next().unwrap().parse::<usize>().unwrap();
+            let i = parts.next().unwrap().parse::<usize>().unwrap() - 1;
             let arrive = parts.next().unwrap().parse::<i64>().unwrap();
-            let packet_type = parts.next().unwrap().parse::<usize>().unwrap();
+            let packet_type = parts.next().unwrap().parse::<usize>().unwrap() - 1;
             let timeout = parts.next().unwrap().parse::<i64>().unwrap();
             packets.push(Packet {
                 i,
@@ -420,18 +461,18 @@ impl<I: IO> Interactor for IOInteractor<I> {
         self.io.write_line(&format!(
             "E {} {} {} {} {}",
             t,
-            core_id,
-            node_id,
+            core_id + 1,
+            node_id + 1,
             s,
             ids.iter()
-                .map(|x| x.to_string())
+                .map(|x| (x + 1).to_string())
                 .collect::<Vec<_>>()
                 .join(" ")
         ));
     }
 
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]> {
-        self.io.write_line(&format!("Q {} {}", t, i));
+        self.io.write_line(&format!("Q {} {}", t, i + 1));
 
         let bitmap = self.read_single::<i64>();
         if bitmap == -1 {
@@ -454,21 +495,41 @@ impl<I: IO> Interactor for IOInteractor<I> {
 }
 
 pub trait Solver {
-    fn solve<I: Interactor>(&self, n: usize, tester: &mut Tester<I>, input: &Input, graph: &Graph);
+    fn solve<I: Interactor>(
+        &self,
+        n: usize,
+        tester: &mut Tester<I>,
+        input: &Input,
+        graph: &Graph,
+    ) -> Score;
 }
 
-fn generate_mock_problem(rnd: &mut Rnd) -> (usize, Input, Vec<Packet>, Vec<[bool; N_SPECIAL]>) {
-    let n = rnd.gen_range(2, 10_001);
+#[derive(Debug, Clone)]
+pub struct ProblemParams {
+    pub n: usize,
+    pub n_cores: usize,
+    pub arrive_term: i64,
+}
+
+fn generate_mock_problem(
+    rnd: &mut Rnd,
+    p: &ProblemParams,
+) -> (usize, Input, Vec<Packet>, Vec<[bool; N_SPECIAL]>) {
+    // let n = rnd.gen_range(2, 10_001);
+    let n = p.n;
     let input = Input {
         cost_r: 20,
-        n_cores: rnd.gen_range(1, 33),
+        // n_cores: rnd.gen_range(1, 33),
+        n_cores: p.n_cores,
         cost_switch: rnd.gen_range(1, 21) as i64,
     };
+    const ARRIVE_START: usize = 1_000_000;
     let packets = (0..n)
         .map(|i| Packet {
             i,
-            arrive: rnd.gen_range(1, LAST_PACKET_T as usize + 1) as i64,
-            packet_type: rnd.gen_range(1, N_PACKET + 1) as usize,
+            // arrive: rnd.gen_range(1, LAST_PACKET_T + 1) as i64,
+            arrive: rnd.gen_range(ARRIVE_START, ARRIVE_START + p.arrive_term as usize + 1) as i64,
+            packet_type: rnd.gen_range(0, N_PACKET_TYPE),
             timeout: rnd.gen_range(1, 100_000) as i64,
         })
         .collect::<Vec<_>>();
@@ -494,13 +555,14 @@ pub struct MockInteractor {
     last_t: i64,
     queried_works: Vec<bool>,
     rnd: Rnd,
+    p: ProblemParams,
 }
 
 impl MockInteractor {
-    pub fn new(seed: u32) -> Self {
+    pub fn new(seed: u32, p: ProblemParams) -> Self {
         let mut rnd = Rnd::new(seed as u32);
         let graph = fixed_graph();
-        let (n, input, packets, packet_works) = generate_mock_problem(&mut rnd);
+        let (n, input, packets, packet_works) = generate_mock_problem(&mut rnd, &p);
         Self {
             n,
             graph,
@@ -511,6 +573,7 @@ impl MockInteractor {
             last_t: 0,
             queried_works: vec![false; n],
             rnd,
+            p,
         }
     }
 }
@@ -590,7 +653,7 @@ impl Interactor for MockInteractor {
 
     fn send_finish(&mut self) {
         // to next problem
-        let (n, input, packets, packet_works) = generate_mock_problem(&mut self.rnd);
+        let (n, input, packets, packet_works) = generate_mock_problem(&mut self.rnd, &self.p);
         self.n = n;
         self.input = input;
         self.packets = packets;
@@ -598,19 +661,5 @@ impl Interactor for MockInteractor {
         self.last_core0_t = None;
         self.last_t = 0;
         self.queried_works = vec![false; n];
-    }
-}
-
-pub struct Runner;
-
-impl Runner {
-    pub fn run(&self, solver: impl Solver, mut interactor: impl Interactor) {
-        let graph = interactor.read_graph();
-        let input = interactor.read_input();
-        for _s in 0..N_SUBTASK {
-            let n = interactor.read_n();
-            let mut tester = Tester::new(&mut interactor, n, input.clone(), graph.clone());
-            solver.solve(n, &mut tester, &input, &graph);
-        }
     }
 }

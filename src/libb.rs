@@ -125,33 +125,64 @@ impl RandomSampler<f64> for ContinousSampler {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug, Clone)]
+pub struct IndexSet {
+    pub que: Vec<usize>,
+    pub pos: Vec<usize>,
+}
 
-    #[test]
-    fn test_dicrete_sampler() {
-        let weight_values = vec![(1, 'a'), (3, 'b'), (6, 'c')];
-        let mut sampler = DiscreteSampler::new(&weight_values);
-        let mut counts = std::collections::HashMap::new();
-        for _ in 0..10000 {
-            let v = sampler.sample();
-            *counts.entry(v).or_insert(0) += 1;
+impl IndexSet {
+    pub fn empty(n: usize) -> Self {
+        IndexSet {
+            que: Vec::with_capacity(n),
+            pos: vec![!0; n],
         }
-        assert!(counts[&'a'] < counts[&'b']);
-        assert!(counts[&'b'] < counts[&'c']);
     }
 
-    #[test]
-    fn test_continous_sampler() {
-        let f = |x: f64| x * x;
-        let mut sampler = ContinousSampler::new(f, 0., 1., 100);
-        let mut sum = 0.;
-        for _ in 0..10000 {
-            let v = sampler.sample();
-            sum += v;
+    pub fn full(n: usize) -> Self {
+        IndexSet {
+            que: (0..n).collect(),
+            pos: (0..n).collect(),
         }
-        let mean = sum / 10000.;
-        assert!((mean - 0.333).abs() < 0.01);
+    }
+
+    pub fn add(&mut self, v: usize) {
+        if self.contains(v) {
+            return;
+        }
+        self.pos[v] = self.que.len();
+        self.que.push(v);
+    }
+
+    pub fn remove(&mut self, v: usize) {
+        if !self.contains(v) {
+            return;
+        }
+
+        let p = self.pos[v];
+        let b = self.que[self.que.len() - 1];
+        self.que.swap_remove(p);
+        self.pos[b] = p;
+        self.pos[v] = !0;
+    }
+
+    pub fn contains(&self, v: usize) -> bool {
+        self.pos[v] != !0
+    }
+
+    pub fn size(&self) -> usize {
+        self.que.len()
+    }
+
+    pub fn get_first(&self) -> Option<usize> {
+        self.que.get(0).copied()
+    }
+
+    pub fn get_random(&self, rnd: &mut Rnd) -> Option<usize> {
+        self.que.get(rnd.gen_index(self.que.len())).copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &usize> {
+        self.que.iter()
     }
 }

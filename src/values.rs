@@ -1,7 +1,7 @@
 use crate::core::*;
 
 pub fn fixed_graph() -> Graph {
-    Graph {
+    let mut graph = Graph {
         paths: vec![
             PacketPath {
                 l: 9,
@@ -234,5 +234,18 @@ pub fn fixed_graph() -> Graph {
             },
         ],
         special_costs: vec![3, 5, 8, 11, 14, 17, 29, 73],
+    };
+
+    // to 0-indexed
+    for path in &mut graph.paths {
+        for node in &mut path.path {
+            *node -= 1;
+        }
     }
+
+    for node in &mut graph.nodes {
+        node.costs.insert(0, 0); // Insert cost for packet size 0
+    }
+
+    graph
 }
