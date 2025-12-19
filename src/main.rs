@@ -260,8 +260,8 @@ fn process_task(
         } else {
             0
         };
-        let next_t = t + dt + switch_cost;
-        q.push((Reverse(next_t), Event::ResumeCore(core_id)));
+        cur_task.next_t = t + dt + switch_cost;
+        q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
         tester.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
 

@@ -69,4 +69,3 @@
 3. バッチ内のパケットがtimeoutしないように、バッチサイズを一定サイズまで大きくして、前から分割する
     - `afford = min(time_limit[packet_i]) - (t + path_duration[packet_type][s]) > 0`
 4. 全てをまとめて、バッチごとに`afford`が小さい順にソートする
-

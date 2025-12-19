@@ -3,3 +3,4 @@ a.rs
 a
 log.json
 *.o
+out.txt
