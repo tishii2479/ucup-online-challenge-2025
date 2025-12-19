@@ -199,9 +199,10 @@ impl<'a, I: Interactor> Tester<'a, I> {
         for id in ids.iter() {
             let packet = self.packets[*id].as_ref().unwrap();
             let next_path_index = self.packet_history[*id].len();
+            let start_t = packet.arrive + self.input.cost_r; // 受信にかかった時間を考慮
             let last_t = self.packet_history[*id]
                 .last()
-                .map_or(0, |history| history.end_t);
+                .map_or(start_t, |history| history.end_t);
             assert!(
                 t >= last_t,
                 "packet {} is busy until {}, but task starts at {}, history: {:?}",
@@ -319,13 +320,15 @@ pub trait IO {
 pub struct StdIO {
     stdin: std::io::Stdin,
     stdout: std::io::Stdout,
+    to_stderr: bool,
 }
 
 impl StdIO {
-    pub fn new() -> Self {
+    pub fn new(to_stderr: bool) -> Self {
         Self {
             stdin: std::io::stdin(),
             stdout: std::io::stdout(),
+            to_stderr,
         }
     }
 }
@@ -342,6 +345,9 @@ impl IO for StdIO {
 
     fn write_line(&mut self, line: &str) {
         writeln!(self.stdout.lock(), "{}", line).expect("Failed to write line");
+        if self.to_stderr {
+            eprintln!("Sent: {}", line);
+        }
         self.stdout.lock().flush().expect("Failed to flush stdout");
     }
 }
@@ -387,7 +393,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
             let l = parts.next().unwrap().parse::<usize>().unwrap();
             let path = parts
                 .take(l)
-                .map(|x| x.parse::<usize>().unwrap())
+                .map(|x| x.parse::<usize>().unwrap() - 1) // 0-indexed
                 .collect::<Vec<_>>();
             paths.push(PacketPath { l, path });
         }

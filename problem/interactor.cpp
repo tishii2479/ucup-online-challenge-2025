@@ -244,7 +244,8 @@ void Run()
                          to_string(idx));
                 if (t < pkts[idx].t)
                     Fail("Invalid Action: packet " + to_string(idx) +
-                         " not ready");
+                         " not ready, " + to_string(t) + " < " +
+                         to_string(pkts[idx].t));
 
                 pkts[idx].t = endTime;
                 ++pkts[idx].pos;
@@ -349,7 +350,7 @@ int main(int argc, char *argv[])
     PrintInput();
     RunAll();
     PrintScore();
-    quitp(best_score);
+    quitp(static_cast<int>(best_score));
 
     return 0;
 }
