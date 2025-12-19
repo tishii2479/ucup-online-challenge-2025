@@ -82,6 +82,7 @@ job_graph[index] {
 - bを超えるバッチサイズsであれば分割して処理をする
 - 分割して処理をした方がよければそうする
 - `works`が溜まってきたら再計算する
+- 一度packetが読まれたら細かく読み込むようにする、終わったら読み込みをやめる
 
 - stack or queue?
     - priority(idle_task) < priority(core_id) となっているはず

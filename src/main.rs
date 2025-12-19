@@ -13,7 +13,7 @@ fn main() {
         arrive_term: 1000,
     };
     let interactor = MockInteractor::new(123456789, p);
-    // let interactor = IOInteractor::new(StdIO::new(false));
+    let interactor = IOInteractor::new(StdIO::new(false));
     let solver = GreedySolver;
     let runner = Runner;
     let _ = runner.run(solver, interactor);
@@ -67,6 +67,7 @@ fn dump_task_logs(task_logs: &[TaskLog]) {
 
 #[derive(Clone, Debug)]
 struct Task {
+    next_t: i64,
     packet_type: usize,
     path_index: usize,
     ids: Vec<usize>,
@@ -77,6 +78,7 @@ struct Task {
 #[derive(Clone, Debug)]
 pub struct State {
     packets: Vec<Option<Packet>>,
+    packet_received_t: Vec<Option<i64>>,
     packet_special_cost: Vec<Option<i64>>,
     /// cur_tasks[core_id]
     cur_tasks: Vec<Option<Task>>,
@@ -89,6 +91,7 @@ impl State {
     fn new(n: usize, input: &Input) -> Self {
         Self {
             packets: vec![None; n],
+            packet_received_t: vec![None; n],
             packet_special_cost: vec![None; n],
             cur_tasks: vec![None; input.n_cores],
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
@@ -173,10 +176,6 @@ fn process_task(
         .expect("cur_task should be Some");
 
     let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
-    // eprintln!(
-    //     "Core {} processing task {:?} at node {}",
-    //     core_id, cur_task, node_id
-    // );
     if node_id == SPECIAL_NODE_ID {
         // 特殊ノードに到達した場合は`works`を問い合わせる
         for &packet_i in &cur_task.ids {
@@ -228,8 +227,8 @@ fn process_task(
         } else {
             0
         };
-        let next_t = t + dt + switch_cost;
-        q.push((Reverse(next_t), Event::ResumeCore(core_id)));
+        cur_task.next_t = t + dt + switch_cost;
+        q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
         tester.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
 
@@ -285,8 +284,8 @@ fn complete_task(
 
     // idle_tasksからタスクを取得する
     if let Some(task) = state.idle_tasks[core_id].pop() {
+        q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
         state.cur_tasks[core_id] = Some(task);
-        q.push((Reverse(t), Event::ResumeCore(core_id)));
         return;
     }
 
@@ -297,8 +296,8 @@ fn complete_task(
         for &packet_i in &task.ids {
             state.await_packets.remove(packet_i);
         }
+        q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
         state.cur_tasks[core_id] = Some(task);
-        q.push((Reverse(t), Event::ResumeCore(core_id)));
         return;
     }
 
@@ -316,10 +315,10 @@ fn receive_packet(
 ) {
     // パケットを登録する
     let packets = tester.send_receive_packets(t);
-    for mut packet in packets {
+    for packet in packets {
         let i = packet.i;
-        packet.arrive += input.cost_r; // 受信にかかった時間を加算する
         state.packets[i] = Some(packet);
+        state.packet_received_t[i] = Some(t);
         state.await_packets.add(i);
     }
 
@@ -336,10 +335,8 @@ fn receive_packet(
             for &packet_i in &task.ids {
                 state.await_packets.remove(packet_i);
             }
+            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
             state.cur_tasks[core_id] = Some(task);
-            // FIXME: 元からあるパケットはtから開始できるので不正確
-            let start_t = t + input.cost_r;
-            q.push((Reverse(start_t), Event::ResumeCore(core_id)));
         }
     }
 
@@ -397,41 +394,50 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 
         let mut cur_ids = vec![];
         let mut min_time_limit = i64::MAX;
+        let mut max_received_t = i64::MIN;
         for &packet in &packets[packet_type] {
             // TODO: そもそも間に合わないパケットは無視して良い
             // TODO: バッチサイズの上限を設ける
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
-            let new_departure = cur_t + new_duration * (1 + 0);
             let packet_time_limit = packet.arrive + packet.timeout;
-            if min_time_limit.min(packet_time_limit) < new_departure && cur_ids.len() > 0 {
+            let received_t = state.packet_received_t[packet.i].unwrap();
+            if min_time_limit.min(packet_time_limit)
+                < max_received_t.max(received_t) + new_duration * (1 + 0)
+                && cur_ids.len() > 0
+            {
                 // バッチを分割する
                 let batch_duration =
                     estimate_path_duration(packet.packet_type, cur_ids.len(), input, graph);
-                let afford = min_time_limit - (cur_t + batch_duration + (1 + 0));
-                tasks.push((afford, packet_type, cur_ids.clone()));
+                let afford = min_time_limit - (max_received_t + batch_duration + (1 + 0));
+                tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
+
                 cur_ids.clear();
-                min_time_limit = packet_time_limit;
+                min_time_limit = i64::MAX;
+                max_received_t = i64::MIN;
             }
+
             min_time_limit = min_time_limit.min(packet_time_limit);
+            max_received_t = max_received_t.max(received_t);
             cur_ids.push(packet.i);
         }
 
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
             let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
-            let afford = min_time_limit - (cur_t + batch_duration + (1 + 0));
-            tasks.push((afford, packet_type, cur_ids.clone()));
+            let afford = min_time_limit - (max_received_t + batch_duration + (1 + 0));
+            tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
         }
     }
 
     // 優先度が低い順にソートする（後ろほど優先度が高い、stackとして扱う）
-    tasks.sort_by_key(|&(afford, _, _)| -afford);
+    tasks.sort_by_key(|&(afford, _, _, _)| -afford);
     tasks
         .into_iter()
-        .map(|(_, packet_type, ids)| {
+        .map(|(_, max_received_t, packet_type, ids)| {
             let s = ids.len();
             Task {
+                next_t: (max_received_t + input.cost_r).max(cur_t),
                 packet_type,
                 path_index: 0,
                 ids: ids,
