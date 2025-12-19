@@ -144,7 +144,7 @@ impl Solver for GreedySolver {
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.cur_tasks[core_id] {
                         if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
-                            complete_task(&mut state, core_id, t.0, graph, &mut q);
+                            complete_task(&mut state, core_id, t.0, input, graph, &mut q);
                             continue;
                         }
                     }
@@ -276,6 +276,7 @@ fn complete_task(
     state: &mut State,
     core_id: usize,
     t: i64,
+    input: &Input,
     graph: &Graph,
     q: &mut BinaryHeap<(Reverse<i64>, Event)>,
 ) {
@@ -290,7 +291,7 @@ fn complete_task(
     }
 
     // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
-    let mut tasks = create_tasks(&state, t, &graph);
+    let mut tasks = create_tasks(&state, t, input, &graph);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &packet_i in &task.ids {
@@ -323,7 +324,7 @@ fn receive_packet(
     }
 
     // `packet_type`ごとにタスクを作成して、優先度を計算する
-    let mut tasks = create_tasks(&state, t, &graph);
+    let mut tasks = create_tasks(&state, t, input, &graph);
 
     // 空いているコアがある限り優先度順にタスクを割り当てる
     for core_id in 0..input.n_cores {
@@ -353,8 +354,17 @@ fn receive_packet(
 
 /// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
 /// TODO: 前計算
-fn estimate_path_duration(packet_type: usize, batch_size: usize, graph: &Graph) -> i64 {
+fn estimate_path_duration(
+    packet_type: usize,
+    batch_size: usize,
+    input: &Input,
+    graph: &Graph,
+) -> i64 {
     let mut ret = 0;
+
+    // core=0から移るswitch costを考慮する
+    ret += batch_size as i64 * input.cost_switch;
+
     for node_id in &graph.paths[packet_type].path {
         let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
         let full_chunk_count = batch_size / max_batch_size;
@@ -373,7 +383,7 @@ fn estimate_path_duration(packet_type: usize, batch_size: usize, graph: &Graph) 
 
 /// タスクを作成する
 /// 後ろほど優先度が高い
-fn create_tasks(state: &State, cur_t: i64, graph: &Graph) -> Vec<Task> {
+fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -390,13 +400,14 @@ fn create_tasks(state: &State, cur_t: i64, graph: &Graph) -> Vec<Task> {
         for &packet in &packets[packet_type] {
             // TODO: そもそも間に合わないパケットは無視して良い
             // TODO: バッチサイズの上限を設ける
-            let new_duration = estimate_path_duration(packet.packet_type, cur_ids.len() + 1, graph);
+            let new_duration =
+                estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
             let new_departure = cur_t + new_duration * (1 + 0);
             let packet_time_limit = packet.arrive + packet.timeout;
             if min_time_limit.min(packet_time_limit) < new_departure && cur_ids.len() > 0 {
                 // バッチを分割する
                 let batch_duration =
-                    estimate_path_duration(packet.packet_type, cur_ids.len(), graph);
+                    estimate_path_duration(packet.packet_type, cur_ids.len(), input, graph);
                 let afford = min_time_limit - (cur_t + batch_duration + (1 + 0));
                 tasks.push((afford, packet_type, cur_ids.clone()));
                 cur_ids.clear();
@@ -408,7 +419,7 @@ fn create_tasks(state: &State, cur_t: i64, graph: &Graph) -> Vec<Task> {
 
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
-            let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), graph);
+            let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
             let afford = min_time_limit - (cur_t + batch_duration + (1 + 0));
             tasks.push((afford, packet_type, cur_ids.clone()));
         }
