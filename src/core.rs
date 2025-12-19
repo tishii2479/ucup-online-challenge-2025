@@ -227,7 +227,7 @@ impl<'a, I: Interactor> Tester<'a, I> {
                 .map(|history| history.core_id);
             let is_switched_core = match last_core {
                 Some(c) => core_id != c,
-                None => false,
+                None => true, // 最初はcore=0に受け取っているので、switchとみなす
             };
             if is_switched_core {
                 num_switches += 1;

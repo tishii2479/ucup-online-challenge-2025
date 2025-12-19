@@ -13,7 +13,7 @@ fn main() {
         arrive_term: 1000,
     };
     let interactor = MockInteractor::new(123456789, p);
-    let interactor = IOInteractor::new(StdIO::new(true));
+    // let interactor = IOInteractor::new(StdIO::new(false));
     let solver = GreedySolver;
     let runner = Runner;
     let _ = runner.run(solver, interactor);
@@ -136,7 +136,6 @@ impl Solver for GreedySolver {
 
         let mut state = State::new(n, input);
         while let Some((t, event)) = q.pop() {
-            eprintln!("t: {}, event: {:?}", t.0, event);
             match event {
                 Event::ReceivePacket => {
                     receive_packet(&mut state, t.0, tester, input, graph, &mut q);
@@ -150,7 +149,7 @@ impl Solver for GreedySolver {
                         }
                     }
 
-                    process_task(&mut state, core_id, t.0, tester, graph, &mut q);
+                    process_task(&mut state, core_id, t.0, tester, input, graph, &mut q);
                 }
             }
         }
@@ -165,6 +164,7 @@ fn process_task(
     core_id: usize,
     t: i64,
     tester: &mut Tester<impl Interactor>,
+    input: &Input,
     graph: &Graph,
     q: &mut BinaryHeap<(Reverse<i64>, Event)>,
 ) {
@@ -173,10 +173,10 @@ fn process_task(
         .expect("cur_task should be Some");
 
     let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
-    eprintln!(
-        "Core {} processing task {:?} at node {}",
-        core_id, cur_task, node_id
-    );
+    // eprintln!(
+    //     "Core {} processing task {:?} at node {}",
+    //     core_id, cur_task, node_id
+    // );
     if node_id == SPECIAL_NODE_ID {
         // 特殊ノードに到達した場合は`works`を問い合わせる
         for &packet_i in &cur_task.ids {
@@ -222,7 +222,13 @@ fn process_task(
         } else {
             graph.nodes[node_id].costs[chunk_ids.len()]
         };
-        let next_t = t + dt;
+        // 最初はcore=0に受け取っているので、switch costが発生する
+        let switch_cost = if cur_task.path_index == 0 {
+            chunk_ids.len() as i64 * input.cost_switch
+        } else {
+            0
+        };
+        let next_t = t + dt + switch_cost;
         q.push((Reverse(next_t), Event::ResumeCore(core_id)));
 
         tester.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
@@ -249,7 +255,13 @@ fn process_task(
         } else {
             graph.nodes[node_id].costs[cur_task.ids.len()]
         };
-        let next_t = t + dt;
+        // 最初はcore=0に受け取っているので、switch costが発生する
+        let switch_cost = if cur_task.path_index == 0 {
+            cur_task.ids.len() as i64 * input.cost_switch
+        } else {
+            0
+        };
+        let next_t = t + dt + switch_cost;
         q.push((Reverse(next_t), Event::ResumeCore(core_id)));
 
         tester.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
@@ -303,8 +315,6 @@ fn receive_packet(
 ) {
     // パケットを登録する
     let packets = tester.send_receive_packets(t);
-    eprintln!("Received packets at t={}, {:?}", t, packets);
-
     for mut packet in packets {
         let i = packet.i;
         packet.arrive += input.cost_r; // 受信にかかった時間を加算する
@@ -326,6 +336,7 @@ fn receive_packet(
                 state.await_packets.remove(packet_i);
             }
             state.cur_tasks[core_id] = Some(task);
+            // FIXME: 元からあるパケットはtから開始できるので不正確
             let start_t = t + input.cost_r;
             q.push((Reverse(start_t), Event::ResumeCore(core_id)));
         }
