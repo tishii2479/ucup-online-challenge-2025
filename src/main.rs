@@ -13,7 +13,7 @@ fn main() {
         arrive_term: 1000,
     };
     let interactor = MockInteractor::new(123456789, p);
-    let interactor = IOInteractor::new(StdIO::new(false));
+    // let interactor = IOInteractor::new(StdIO::new(false));
     let solver = GreedySolver;
     let runner = Runner;
     let _ = runner.run(solver, interactor);
@@ -34,7 +34,7 @@ impl Runner {
             let score = solver.solve(n, &mut tester, &input, &graph);
 
             eprintln!(
-                "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.2})",
+                "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.5})",
                 score.to_score(),
                 score.throughput,
                 score.timeout_rate
@@ -78,7 +78,6 @@ struct Task {
 #[derive(Clone, Debug)]
 pub struct State {
     packets: Vec<Option<Packet>>,
-    packet_received_t: Vec<Option<i64>>,
     packet_special_cost: Vec<Option<i64>>,
     /// cur_tasks[core_id]
     cur_tasks: Vec<Option<Task>>,
@@ -91,7 +90,6 @@ impl State {
     fn new(n: usize, input: &Input) -> Self {
         Self {
             packets: vec![None; n],
-            packet_received_t: vec![None; n],
             packet_special_cost: vec![None; n],
             cur_tasks: vec![None; input.n_cores],
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
@@ -318,7 +316,6 @@ fn receive_packet(
     for packet in packets {
         let i = packet.i;
         state.packets[i] = Some(packet);
-        state.packet_received_t[i] = Some(t);
         state.await_packets.add(i);
     }
 
@@ -401,9 +398,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
             let packet_time_limit = packet.arrive + packet.timeout;
-            let received_t = state.packet_received_t[packet.i].unwrap();
             if min_time_limit.min(packet_time_limit)
-                < max_received_t.max(received_t) + new_duration * (1 + 0)
+                < max_received_t.max(packet.received_t) + new_duration * (1 + 0)
                 && cur_ids.len() > 0
             {
                 // バッチを分割する
@@ -418,7 +414,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             }
 
             min_time_limit = min_time_limit.min(packet_time_limit);
-            max_received_t = max_received_t.max(received_t);
+            max_received_t = max_received_t.max(packet.received_t);
             cur_ids.push(packet.i);
         }
 

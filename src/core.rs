@@ -36,14 +36,11 @@ pub struct Graph {
 
 #[derive(Debug, Clone)]
 pub struct Packet {
-    /// index
     pub i: usize,
-    /// arrive time
     pub arrive: i64,
-    /// type
     pub packet_type: usize,
-    /// timeout
     pub timeout: i64,
+    pub received_t: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -199,7 +196,7 @@ impl<'a, I: Interactor> Tester<'a, I> {
         for id in ids.iter() {
             let packet = self.packets[*id].as_ref().unwrap();
             let next_path_index = self.packet_history[*id].len();
-            let start_t = packet.arrive + self.input.cost_r; // 受信にかかった時間を考慮
+            let start_t = packet.received_t + self.input.cost_r; // 受信にかかった時間を考慮
             let last_t = self.packet_history[*id]
                 .last()
                 .map_or(start_t, |history| history.end_t);
@@ -458,6 +455,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
                 arrive,
                 packet_type,
                 timeout,
+                received_t: t,
             });
         }
         (p, packets)
@@ -537,6 +535,7 @@ fn generate_mock_problem(
             arrive: rnd.gen_range(ARRIVE_START, ARRIVE_START + p.arrive_term as usize + 1) as i64,
             packet_type: rnd.gen_range(0, N_PACKET_TYPE),
             timeout: rnd.gen_range(1, 100_000) as i64,
+            received_t: -1,
         })
         .collect::<Vec<_>>();
     let packet_works = (0..n)
@@ -612,12 +611,16 @@ impl Interactor for MockInteractor {
             last_core0_t + self.input.cost_r,
             t
         );
-        let packets: Vec<Packet> = self
+        let mut packets: Vec<Packet> = self
             .packets
             .iter()
             .filter(|p| last_core0_t < p.arrive && p.arrive <= t)
             .cloned()
             .collect();
+        // received_tを更新する
+        for p in &mut packets {
+            p.received_t = t;
+        }
         self.last_core0_t = Some(t);
         (packets.len(), packets)
     }
