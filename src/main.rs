@@ -49,6 +49,7 @@ pub struct State {
     /// cur_tasks[core_id] := core_idで次に実行するタスク
     cur_tasks: Vec<Option<Task>>,
     /// idle_tasks[core_id] := core_idで待機中のタスク
+    /// 上に積まれているほど優先度が高い
     idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
 }
@@ -336,9 +337,21 @@ fn complete_task(
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     if input.n_cores > 1 {
+        // idle_tasksがあるならそのままもらってくる
+        for other_core_id in 0..input.n_cores {
+            if other_core_id == core_id {
+                continue;
+            }
+            if let Some(task) = state.idle_tasks[other_core_id].pop() {
+                q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+                state.cur_tasks[core_id] = Some(task);
+                return;
+            }
+        }
+
         let busiest_core_id = (0..input.n_cores)
             .filter(|&id| id != core_id)
-            .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph).estimate())
+            .max_by_key(|&id| estimate_core_duration(&state, id, input, graph).estimate())
             .unwrap();
 
         // idle_tasksがあるならそのままもらってくる
@@ -421,7 +434,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
     Some((task1, task2))
 }
 
-fn estimate_core_end_t(state: &State, core_id: usize, input: &Input, graph: &Graph) -> Duration {
+fn estimate_core_duration(state: &State, core_id: usize, input: &Input, graph: &Graph) -> Duration {
     let mut ret = Duration::new(0, 0);
     if let Some(cur_task) = &state.cur_tasks[core_id] {
         ret.add(&estimate_task_duration(
