@@ -569,6 +569,8 @@ fn estimate_path_duration(
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
+    const MAX_BATCH_SIZE: usize = 32;
+
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -594,13 +596,12 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         let mut max_received_t = i64::MIN;
         for &packet in &packets[packet_type] {
             // TODO: そもそも間に合わないパケットは無視して良い
-            // TODO: バッチサイズの上限を設ける
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
-            if min_time_limit.min(packet.time_limit)
+            let changed_to_timeout_batch = min_time_limit.min(packet.time_limit)
                 < max_received_t.max(packet.received_t) + new_duration
-                && cur_ids.len() > 0
-            {
+                && cur_ids.len() >= 1;
+            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
 
