@@ -37,6 +37,7 @@ pub struct Packet {
     pub arrive: i64,
     pub packet_type: usize,
     pub timeout: i64,
+    pub time_limit: i64,
     pub received_t: i64,
 }
 

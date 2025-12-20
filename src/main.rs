@@ -414,9 +414,18 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
     }
 
     let mut tasks = vec![];
+
+    let mut push_task =
+        |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64, max_received_t: i64| {
+            let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
+            let next_t = (max_received_t + input.cost_r).max(cur_t);
+            let afford = min_time_limit - (next_t + batch_duration);
+            tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
+        };
+
     for packet_type in 0..N_PACKET_TYPE {
         // パケットを締め切り順にソートする
-        packets[packet_type].sort_by_key(|&packet| packet.arrive + packet.timeout);
+        packets[packet_type].sort_by_key(|&packet| packet.time_limit);
 
         let mut cur_ids = vec![];
         let mut min_time_limit = i64::MAX;
@@ -426,35 +435,26 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             // TODO: バッチサイズの上限を設ける
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
-            let packet_time_limit = packet.arrive + packet.timeout;
-            assert!(packet.received_t >= 0);
-            if min_time_limit.min(packet_time_limit)
+            if min_time_limit.min(packet.time_limit)
                 < max_received_t.max(packet.received_t) + new_duration
                 && cur_ids.len() > 0
             {
                 // バッチを分割する
-                let batch_duration =
-                    estimate_path_duration(packet.packet_type, cur_ids.len(), input, graph);
-                let next_t = (max_received_t + input.cost_r).max(cur_t);
-                let afford = min_time_limit - (next_t + batch_duration);
-                tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
+                push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
 
                 cur_ids.clear();
                 min_time_limit = i64::MAX;
                 max_received_t = i64::MIN;
             }
 
-            min_time_limit = min_time_limit.min(packet_time_limit);
+            min_time_limit = min_time_limit.min(packet.time_limit);
             max_received_t = max_received_t.max(packet.received_t);
             cur_ids.push(packet.i);
         }
 
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
-            let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
-            let next_t = (max_received_t + input.cost_r).max(cur_t);
-            let afford = min_time_limit - (next_t + batch_duration);
-            tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
+            push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
         }
     }
 

@@ -107,6 +107,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
                 arrive,
                 packet_type,
                 timeout,
+                time_limit: arrive + timeout,
                 received_t: t,
             });
         }
