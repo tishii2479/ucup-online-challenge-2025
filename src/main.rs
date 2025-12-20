@@ -352,16 +352,14 @@ fn complete_task(
             return;
         };
 
-        // 最後のノードで分割することをやめる
-        // FIXME: 分割しても良い場合にダメになる
-        // if task.path_index >= graph.paths[task.packet_type].path.len() - 1 {
-        //     return;
-        // }
-
-        // FIXME: task2が完了している場合にtask2が完了するまでcore_idを使えないので、損をしている
         let Some((task1, mut task2)) = split_task(task) else {
             return;
         };
+
+        // task2が完了している場合は分割する必要がない
+        if task2.path_index == graph.paths[task2.packet_type].path.len() {
+            return;
+        }
 
         // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
         state.cur_tasks[busiest_core_id] = Some(task1);
@@ -433,6 +431,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         packets: packets2,
         is_chunked: task2_is_chunked,
     };
+
     Some((task1, task2))
 }
 
