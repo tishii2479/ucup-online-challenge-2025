@@ -149,3 +149,128 @@ impl<I: IO> Interactor for IOInteractor<I> {
         self.io.write_line("F");
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct Tracker {
+    pub enabled: bool,
+    pub packet_history: Vec<Vec<PacketHistory>>,
+    pub task_logs: Vec<TaskLog>,
+}
+
+impl Tracker {
+    pub fn new(n: usize, enabled: bool) -> Self {
+        let n = if enabled { n } else { 1 };
+        Tracker {
+            enabled,
+            packet_history: vec![Vec::with_capacity(32); n],
+            task_logs: Vec::with_capacity(32 * n),
+        }
+    }
+
+    pub fn add_packet_history(&mut self, packet_id: usize, history: PacketHistory) {
+        if self.enabled {
+            self.packet_history[packet_id].push(history);
+        }
+    }
+
+    pub fn add_task_log(&mut self, log: TaskLog) {
+        if self.enabled {
+            self.task_logs.push(log);
+        }
+    }
+
+    pub fn calc_score(
+        &self,
+        n: usize,
+        packets: &Vec<Option<Packet>>,
+        graph: &Graph,
+        input: &Input,
+    ) -> Score {
+        if !self.enabled {
+            // eprintln!("Tracker is disabled. Score can not be calculated.");
+            return Score {
+                throughput: 0.0,
+                timeout_rate: 0.0,
+            };
+        }
+
+        let mut max_departure = 0;
+        let mut min_arrive = i64::MAX;
+        let mut timeout_packets = 0;
+        for i in 0..n {
+            let packet = packets[i].as_ref().expect("packet should be received");
+            let arrive = packet.arrive;
+            min_arrive = min_arrive.min(arrive);
+
+            let path_len = graph.paths[packet.packet_type].l;
+            let path_history = &self.packet_history[i];
+            assert_eq!(
+                path_history.len(),
+                path_len,
+                "packet {} has not finished its path",
+                i
+            );
+            let departure = path_history[path_len - 1].end_t;
+            max_departure = max_departure.max(departure);
+
+            let timeout = packet.timeout;
+            if departure - arrive > timeout {
+                timeout_packets += 1;
+            }
+        }
+
+        let throughput =
+            ((n - 1) as f64 * 1e6) / (input.n_cores as f64 * (max_departure - min_arrive) as f64);
+        let timeout_rate = (timeout_packets as f64) / (n as f64);
+        Score {
+            throughput,
+            timeout_rate,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn dump_score(
+        &self,
+        n: usize,
+        packets: &Vec<Option<Packet>>,
+        graph: &Graph,
+        input: &Input,
+    ) {
+        if !self.enabled {
+            // eprintln!("Tracker is disabled. Score can not be calculated.");
+            return;
+        }
+
+        let score = self.calc_score(n, &packets, graph, input);
+        eprintln!(
+            "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.5})",
+            score.to_score(),
+            score.throughput,
+            score.timeout_rate
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn dump_task_logs(&self) {
+        if !self.enabled {
+            // eprintln!("Tracker is disabled. Task logs can not be dumped.");
+            return;
+        }
+
+        use std::io::Write;
+        let mut file = std::fs::File::create("log.json").unwrap();
+        let mut json = String::new();
+        json.push('[');
+        for (i, log) in self.task_logs.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!(
+            r#"{{"core_id":{},"start_t":{},"end_t":{},"batch_size":{},"packet_type":{},"path_index":{}}}"#,
+            log.core_id, log.start_t, log.end_t, log.batch_size, log.packet_type, log.path_index
+        ));
+        }
+        json.push(']');
+        file.write_all(json.as_bytes()).unwrap();
+    }
+}

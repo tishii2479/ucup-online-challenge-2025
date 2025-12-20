@@ -31,24 +31,6 @@ impl Runner {
     }
 }
 
-fn dump_task_logs(task_logs: &[TaskLog]) {
-    use std::io::Write;
-    let mut file = std::fs::File::create("log.json").unwrap();
-    let mut json = String::new();
-    json.push('[');
-    for (i, log) in task_logs.iter().enumerate() {
-        if i > 0 {
-            json.push(',');
-        }
-        json.push_str(&format!(
-            r#"{{"core_id":{},"start_t":{},"end_t":{},"batch_size":{},"packet_type":{},"path_index":{}}}"#,
-            log.core_id, log.start_t, log.end_t, log.batch_size, log.packet_type, log.path_index
-        ));
-    }
-    json.push(']');
-    file.write_all(json.as_bytes()).unwrap();
-}
-
 #[derive(Clone, Debug)]
 struct Task {
     next_t: i64,
@@ -154,14 +136,8 @@ impl Solver for GreedySolver {
 
         interactor.send_finish();
 
-        let score = tracker.calc_score(n, &state.packets, graph, input);
-        eprintln!(
-            "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.5})",
-            score.to_score(),
-            score.throughput,
-            score.timeout_rate
-        );
-        dump_task_logs(&tracker.task_logs);
+        tracker.dump_score(n, &state.packets, graph, input);
+        tracker.dump_task_logs();
     }
 }
 
