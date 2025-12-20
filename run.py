@@ -5,20 +5,21 @@ import subprocess
 import pandas as pd
 
 CASES = [
-    {"name": "n=1000, n_cores=8, arrive_terms=1000", "file": "in/0000.txt"},
-    {"name": "n=1000, n_cores=4, arrive_terms=1000", "file": "in/0001.txt"},
-    {"name": "n=1000, n_cores=16, arrive_terms=1000", "file": "in/0002.txt"},
-    {"name": "n=500, n_cores=8, arrive_terms=2000", "file": "in/0003.txt"},
-    {"name": "n=200, n_cores=1, arrive_terms=1000", "file": "in/0004.txt"},
-    {"name": "seed=2, n=200, n_cores=2, arrive_terms=10", "file": "in/0005.txt"},
-    {"name": "seed=13, n=200, n_cores=2, arrive_terms=10", "file": "in/0006.txt"},
+    {"seed": 0, "n": 200, "n_cores": 1, "arrive_terms": 10},
+    {"seed": 1, "n": 200, "n_cores": 2, "arrive_terms": 10},
+    {"seed": 2, "n": 1000, "n_cores": 4, "arrive_terms": 1000},
+    {"seed": 3, "n": 1000, "n_cores": 8, "arrive_terms": 1000},
+    {"seed": 4, "n": 1000, "n_cores": 16, "arrive_terms": 1000},
+    {"seed": 5, "n": 1000, "n_cores": 32, "arrive_terms": 1000},
+    {"seed": 6, "n": 200, "n_cores": 4, "arrive_terms": 1000},
+    {"seed": 7, "n": 2000, "n_cores": 4, "arrive_terms": 5000},
 ]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", type=str, default="current")
-    parser.add_argument("--add-to-csv", action="store_true")
+    parser.add_argument("--log", action="store_true")
     args = parser.parse_args()
 
     subprocess.run(
@@ -37,14 +38,33 @@ def main() -> None:
     df = pd.read_csv("doc/scores.csv")
 
     for case in CASES:
-        in_file = case["file"]
-        print(f"\n--- Running case: {case['name']} ({in_file}) ---")
+        in_file = f"in/{str(case['seed']).zfill(4)}.txt"
+        print(
+            f"\n--- Running case: n={case['n']}, n_cores={case['n_cores']}, "
+            f"arrive_terms={case['arrive_terms']} ({in_file}) ---"
+        )
+        subprocess.run(
+            [
+                "python3",
+                "gen.py",
+                "--seed",
+                str(case["seed"]),
+                "--n",
+                str(case["n"]),
+                "--n-cores",
+                str(case["n_cores"]),
+                "--arrive-term",
+                str(case["arrive_terms"]),
+            ],
+            stdout=open(in_file, "w"),
+        )
+
         result = subprocess.run(
             [
                 "python3",
                 "problem/interactive_runner.py",
                 "./problem/interactor.o",
-                in_file,
+                str(in_file),
                 "out.txt",
                 "--",
                 "./sol",
@@ -83,7 +103,7 @@ def main() -> None:
     df = pd.concat([df, new_df], ignore_index=True)
     print(df)
 
-    if args.add_to_csv:
+    if args.log:
         print("Updating doc/scores.csv")
         df.to_csv("doc/scores.csv", index=False)
 
