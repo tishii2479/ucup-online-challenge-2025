@@ -602,8 +602,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 
     for packet_type in 0..N_PACKET_TYPE {
         // パケットを締め切り順にソートする
-        // そもそも間に合わないパケットは優先度を一番下げる
         let duration_b1 = estimate_path_duration(packet_type, 1, input, graph);
+        // TODO: そもそも間に合わないパケットは優先度を一番下げる
         packets[packet_type].sort_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &duration_b1) {
                 // i64::MAX
@@ -620,14 +620,14 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
             let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &duration_b1);
-            let next_t = next_t(max_received_t, cur_t, input.cost_r);
             let changed_to_timeout_batch = if is_timeouted_packet {
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
+                let next_t = next_t(max_received_t, cur_t, input.cost_r);
                 min_time_limit < next_t + new_duration.estimate() && cur_ids.len() >= 1
             } else {
-                min_time_limit.min(packet.time_limit)
-                    < next_t.max(packet.received_t) + new_duration.estimate()
+                let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
+                min_time_limit.min(packet.time_limit) < next_t + new_duration.estimate()
                     && cur_ids.len() >= 1
             };
 
