@@ -193,7 +193,7 @@ void Run()
             s = ouf.readInt();
             // tout<<" "<<s;
             if (s < 1 || s > bs[nodeId])
-                Fail("Invalid Action: incorrect batchsize");
+                Fail("Invalid Action: incorrect batchsize: " + to_string(s) + " b=" + to_string(bs[nodeId]));
             for (int i = 1; i <= s; ++i)
             {
                 id[i] = ouf.readInt();

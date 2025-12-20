@@ -38,6 +38,7 @@ struct Task {
     ids: Vec<usize>,
     is_chunked: bool,
     is_advanced: Vec<bool>,
+    is_switching_core: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -170,8 +171,7 @@ fn process_packets(
     } else {
         graph.nodes[node_id].costs[packet_ids.len()]
     };
-    // 最初はcore=0に受け取っているので、switch costが発生する
-    let switch_cost = if cur_task.path_index == 0 {
+    let switch_cost = if cur_task.is_switching_core {
         packet_ids.len() as i64 * input.cost_switch
     } else {
         0
@@ -241,6 +241,8 @@ fn process_task(
     let is_chunk = cur_task.ids.len() > max_batch_size || cur_task.is_chunked;
 
     if is_chunk {
+        cur_task.is_chunked = true;
+
         let mut chunk_ids = Vec::with_capacity(max_batch_size);
         for (i, id) in cur_task.ids.iter().enumerate() {
             if chunk_ids.len() >= max_batch_size {
@@ -270,8 +272,9 @@ fn process_task(
         // チャンクが完了したか確認する
         let all_chunk_finished = cur_task.is_advanced.iter().all(|&b| b);
         if all_chunk_finished {
-            // 次のノードへ進む
             cur_task.path_index += 1;
+            cur_task.is_switching_core = false;
+
             cur_task.is_chunked = false;
             for e in cur_task.is_advanced.iter_mut() {
                 *e = false;
@@ -292,8 +295,8 @@ fn process_task(
             tracker,
         );
 
-        // 次のノードへ進む
         cur_task.path_index += 1;
+        cur_task.is_switching_core = false;
     }
 }
 
@@ -346,21 +349,26 @@ fn complete_task(
     let Some(task) = &state.cur_tasks[busiest_core_id] else {
         return;
     };
-    let Some((task1, task2)) = split_task(task) else {
+    let Some((task1, mut task2)) = split_task(task) else {
         return;
     };
 
-    // eprintln!("core {} is busiest", busiest_core_id);
-    // eprintln!("core: {}", core_id);
-    // dbg!(&task);
-    // dbg!(&task1);
-    // dbg!(&task2);
+    // dbg!(
+    //     &task.is_chunked,
+    //     task1.is_chunked,
+    //     task2.is_chunked,
+    //     task.ids.len(),
+    //     task1.ids.len(),
+    //     task2.ids.len(),
+    //     task.is_switching_core,
+    //     task1.is_switching_core,
+    //     task2.is_switching_core
+    // );
 
     // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
     state.cur_tasks[busiest_core_id] = Some(task1);
 
-    // let switch_cost = task2.ids.len() as i64 * input.cost_switch;
-    // task2.next_t += switch_cost;
+    task2.is_switching_core = true;
     q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
     state.cur_tasks[core_id] = Some(task2);
 
@@ -369,9 +377,10 @@ fn complete_task(
 
 /// タスクを分割する
 fn split_task(task: &Task) -> Option<(Task, Task)> {
-    let Some(mid) = task.ids.len().checked_div(2) else {
+    if task.ids.len() < 2 {
         return None;
-    };
+    }
+    let mid = task.ids.len() / 2;
 
     // idsを交互に追加する
     let mut task1_ids = Vec::with_capacity(mid + 1);
@@ -401,6 +410,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         ids: task1_ids,
         is_chunked: task1_is_chunked,
         is_advanced: task1_is_advanced,
+        is_switching_core: task.is_switching_core,
     };
     let task2 = Task {
         next_t: task.next_t,
@@ -409,6 +419,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         ids: task2_ids,
         is_chunked: task2_is_chunked,
         is_advanced: task2_is_advanced,
+        is_switching_core: task.is_switching_core,
     };
     Some((task1, task2))
 }
@@ -441,8 +452,7 @@ fn estimate_task_duration(
 
     let mut ret = 0;
 
-    // core=0から移るswitch costを考慮する
-    if task.path_index == 0 {
+    if task.is_switching_core {
         ret += first_packets as i64 * input.cost_switch;
     }
 
@@ -466,14 +476,15 @@ fn estimate_task_duration(
             ret += task
                 .ids
                 .iter()
-                .filter(|&&id| {
+                .enumerate()
+                .filter(|&(packet_i, _)| {
                     if i == 0 && task.is_chunked {
-                        !task.is_advanced[id]
+                        !task.is_advanced[packet_i]
                     } else {
                         true
                     }
                 })
-                .map(|&id| packet_special_cost[id].unwrap_or(special_cost_estimate))
+                .map(|(_, &id)| packet_special_cost[id].unwrap_or(special_cost_estimate))
                 .sum::<i64>();
         }
     }
@@ -617,6 +628,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         .map(|(_, max_received_t, packet_type, ids)| {
             let s = ids.len();
             Task {
+                is_switching_core: true, // 最初はcore=0から必ずコアを移る
                 next_t: (max_received_t + input.cost_r).max(cur_t),
                 packet_type,
                 path_index: 0,
