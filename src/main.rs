@@ -335,7 +335,6 @@ fn complete_task(
     }
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
-    // 最も処理終了時間が長いコアを見つける
     if input.n_cores > 1 {
         let busiest_core_id = (0..input.n_cores)
             .filter(|&id| id != core_id)
@@ -478,7 +477,10 @@ fn receive_packet(
         }
     }
 
-    // TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
+    // 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
+    while let Some(task) = tasks.pop() {
+        // タスクを差し込まないとtimeoutが発生するかどうか調べる
+    }
 
     // 次のパケット受信イベントを登録する
     let next_t = t + input.cost_r * 10; // TODO: 調整
