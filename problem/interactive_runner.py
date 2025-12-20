@@ -111,11 +111,11 @@ t_judge.join()
 
 # Print an empty line to handle the case when stderr doesn't print EOL.
 print()
-print("Judge return code:", t_judge.return_code)
+# print("Judge return code:", t_judge.return_code)
 if t_judge.error_message:
     print("Judge error message:", t_judge.error_message)
 
-print("Solution return code:", t_sol.return_code)
+# print("Solution return code:", t_sol.return_code)
 if t_sol.error_message:
     print("Solution error message:", t_sol.error_message)
 
@@ -132,8 +132,9 @@ elif t_judge.return_code not in (0, 7):
         "would be interpreted as a Wrong Answer in the system."
     )
 else:
-    print(
-        "A solution and judge both finishing with exit code 0 (without "
-        "exceeding time or memory limits) would be interpreted as Correct "
-        "in the system."
-    )
+    # print(
+    #     "A solution and judge both finishing with exit code 0 (without "
+    #     "exceeding time or memory limits) would be interpreted as Correct "
+    #     "in the system."
+    # )
+    pass

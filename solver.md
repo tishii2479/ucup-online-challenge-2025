@@ -57,7 +57,8 @@
 3. TODO: パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     1. 処理終了時間が最も長いコアを見つける
     2. idle_taskがあるならそのままもらってくる
-    3. max(処理時間)が最も短くなるような分割を全探索する
+    3. busiest_coreのcur_taskを半分に分ける
+        - TODO:max(処理時間)が最も短くなるような分割を全探索する
     4. `cur_task[long_core_id]`と`cur_task[core_id]`を更新する
     5. `q.push((next_t, core_id))`
 4. （なければパケットが来るまで待機で良い）
@@ -65,7 +66,9 @@
 ## タスクの作成
 1. packet_typeごとに分ける
 2. `time_limit[packet_i] := arrive[packet_i] + timeout[packet_i]`が小さい順にソートする
-    - 間に合わないことがわかっているものは優先度を一番下げる
+    - TODO: 間に合わないことがわかっているものは優先度を一番下げる
+    - TODO: durationはspecial_nodeとそれ以外で分けて評価する
 3. バッチ内のパケットがtimeoutしないように、バッチサイズを一定サイズまで大きくして、前から分割する
     - `afford = min(time_limit[packet_i]) - (t + path_duration[packet_type][s]) > 0`
+    - TODO: バッチサイズの上限を設ける
 4. 全てをまとめて、バッチごとに`afford`が小さい順にソートする

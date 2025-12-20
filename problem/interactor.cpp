@@ -204,7 +204,8 @@ void Run()
             if (t < core_valid_time[coreId])
                 Fail("Invalid Action: incorrect time on coreId " +
                      to_string(coreId) + ": t=" + to_string(t) +
-                     " available=" + to_string(core_valid_time[coreId]));
+                     " available=" + to_string(core_valid_time[coreId]) +
+                     " nodeId=" + to_string(nodeId) + " s=" + to_string(s));
             for (int i = 1; i <= s; ++i)
             {
                 int idx = id[i];

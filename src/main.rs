@@ -44,9 +44,9 @@ struct Task {
 pub struct State {
     packets: Vec<Option<Packet>>,
     packet_special_cost: Vec<Option<i64>>,
-    /// cur_tasks[core_id]
+    /// cur_tasks[core_id] := core_idで次に実行するタスク
     cur_tasks: Vec<Option<Task>>,
-    /// idle_tasks[core_id]
+    /// idle_tasks[core_id] := core_idで待機中のタスク
     idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
 }
@@ -83,8 +83,7 @@ impl State {
 #[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Eq, Ord)]
 enum Event {
     ReceivePacket,
-    /// core_id
-    ResumeCore(usize),
+    ResumeCore(usize), // core_id
 }
 
 type EventQueue = BinaryHeap<(Reverse<i64>, Event)>;
@@ -143,7 +142,8 @@ impl Solver for GreedySolver {
 }
 
 /// パケットを処理する
-fn execute_packet(
+/// chunk_idsがSomeなら、そのチャンクのみ処理する
+fn process_packets(
     cur_task: &mut Task,
     cur_t: i64,
     chunk_ids: Option<&[usize]>,
@@ -180,6 +180,7 @@ fn execute_packet(
     q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
     interactor.send_execute(cur_t, core_id, node_id, packet_ids.len(), &packet_ids);
+
     for id in packet_ids {
         tracker.add_packet_history(
             *id,
@@ -252,7 +253,7 @@ fn process_task(
             chunk_ids.push(*id);
         }
 
-        execute_packet(
+        process_packets(
             cur_task,
             t,
             Some(&chunk_ids),
@@ -277,7 +278,7 @@ fn process_task(
             }
         }
     } else {
-        execute_packet(
+        process_packets(
             cur_task,
             t,
             None,
@@ -327,7 +328,157 @@ fn complete_task(
         return;
     }
 
-    // TODO: パケットが残っていなければ、他のコアから分割してタスクをもらってくる
+    // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
+    // 最も処理終了時間が長いコアを見つける
+    let busiest_core_id = (0..input.n_cores)
+        .filter(|&id| id != core_id)
+        .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph))
+        .unwrap();
+
+    // idle_tasksがあるならそのままもらってくる
+    if let Some(task) = state.idle_tasks[busiest_core_id].pop() {
+        q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+        state.cur_tasks[core_id] = Some(task);
+        return;
+    }
+
+    // busiest_coreのcur_taskを半分に分ける
+    let Some(task) = &state.cur_tasks[busiest_core_id] else {
+        return;
+    };
+    let Some((task1, task2)) = split_task(task) else {
+        return;
+    };
+
+    // eprintln!("core {} is busiest", busiest_core_id);
+    // eprintln!("core: {}", core_id);
+    // dbg!(&task);
+    // dbg!(&task1);
+    // dbg!(&task2);
+
+    // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
+    state.cur_tasks[busiest_core_id] = Some(task1);
+
+    // let switch_cost = task2.ids.len() as i64 * input.cost_switch;
+    // task2.next_t += switch_cost;
+    q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
+    state.cur_tasks[core_id] = Some(task2);
+
+    // NOTE: なければパケットが来るまで待機で良い
+}
+
+/// タスクを分割する
+fn split_task(task: &Task) -> Option<(Task, Task)> {
+    let Some(mid) = task.ids.len().checked_div(2) else {
+        return None;
+    };
+
+    // idsを交互に追加する
+    let mut task1_ids = Vec::with_capacity(mid + 1);
+    let mut task1_is_advanced = Vec::with_capacity(mid + 1);
+    let mut task2_ids = Vec::with_capacity(mid + 1);
+    let mut task2_is_advanced = Vec::with_capacity(mid + 1);
+
+    for id in 0..task.ids.len() {
+        if id % 2 == 0 {
+            task1_ids.push(task.ids[id]);
+            task1_is_advanced.push(task.is_advanced[id]);
+        } else {
+            task2_ids.push(task.ids[id]);
+            task2_is_advanced.push(task.is_advanced[id]);
+        }
+    }
+
+    let task1_is_chunked =
+        task1_is_advanced.iter().any(|&b| b) && task1_is_advanced.iter().any(|&b| !b);
+    let task2_is_chunked =
+        task2_is_advanced.iter().any(|&b| b) && task2_is_advanced.iter().any(|&b| !b);
+
+    let task1 = Task {
+        next_t: task.next_t,
+        packet_type: task.packet_type,
+        path_index: task.path_index,
+        ids: task1_ids,
+        is_chunked: task1_is_chunked,
+        is_advanced: task1_is_advanced,
+    };
+    let task2 = Task {
+        next_t: task.next_t,
+        packet_type: task.packet_type,
+        path_index: task.path_index,
+        ids: task2_ids,
+        is_chunked: task2_is_chunked,
+        is_advanced: task2_is_advanced,
+    };
+    Some((task1, task2))
+}
+
+fn estimate_core_end_t(state: &State, core_id: usize, input: &Input, graph: &Graph) -> i64 {
+    let mut ret = 0;
+    if let Some(cur_task) = &state.cur_tasks[core_id] {
+        ret += estimate_task_duration(cur_task, input, graph, &state.packet_special_cost)
+    }
+    for idle_task in &state.idle_tasks[core_id] {
+        ret += estimate_task_duration(idle_task, input, graph, &state.packet_special_cost)
+    }
+    ret
+}
+
+/// タスクを終了するのにかかる時間を見積もる
+fn estimate_task_duration(
+    task: &Task,
+    input: &Input,
+    graph: &Graph,
+    packet_special_cost: &Vec<Option<i64>>,
+) -> i64 {
+    // TODO: worksを開示したら更新する
+    let special_cost_estimate = graph.special_costs.iter().sum::<i64>() / 2;
+    let first_packets = if task.is_chunked {
+        task.is_advanced.iter().filter(|&&b| !b).count()
+    } else {
+        task.ids.len()
+    };
+
+    let mut ret = 0;
+
+    // core=0から移るswitch costを考慮する
+    if task.path_index == 0 {
+        ret += first_packets as i64 * input.cost_switch;
+    }
+
+    for (i, node_id) in graph.paths[task.packet_type].path[task.path_index..]
+        .iter()
+        .enumerate()
+    {
+        let packets_count = if i == 0 {
+            first_packets
+        } else {
+            task.ids.len()
+        };
+        let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
+        let full_chunk_count = packets_count / max_batch_size;
+        ret += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
+
+        let remainder = packets_count % max_batch_size;
+        ret += graph.nodes[*node_id].costs[remainder];
+
+        if *node_id == SPECIAL_NODE_ID {
+            ret += task
+                .ids
+                .iter()
+                .filter(|&&id| {
+                    if i == 0 && task.is_chunked {
+                        !task.is_advanced[id]
+                    } else {
+                        true
+                    }
+                })
+                .map(|&id| packet_special_cost[id].unwrap_or(special_cost_estimate))
+                .sum::<i64>();
+        }
+    }
+
+    ret
 }
 
 /// パケット受信イベントの処理
@@ -368,7 +519,7 @@ fn receive_packet(
     // TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
 
     // 次のパケット受信イベントを登録する
-    let next_t = t + input.cost_r * 10;
+    let next_t = t + input.cost_r * 10; // TODO: 調整
     if next_t <= LAST_PACKET_T {
         q.push((Reverse(next_t), Event::ReceivePacket));
     }
@@ -382,6 +533,8 @@ fn estimate_path_duration(
     input: &Input,
     graph: &Graph,
 ) -> i64 {
+    // TODO: worksを開示したら更新する
+    let special_cost_estimate = graph.special_costs.iter().sum::<i64>() / 2;
     let mut ret = 0;
 
     // core=0から移るswitch costを考慮する
@@ -397,7 +550,7 @@ fn estimate_path_duration(
 
         if *node_id == SPECIAL_NODE_ID {
             // TODO: worksを開示したら更新する
-            ret += batch_size as i64 * graph.special_costs.iter().sum::<i64>() / 2;
+            ret += batch_size as i64 * special_cost_estimate;
         }
     }
     ret
