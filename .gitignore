@@ -5,3 +5,4 @@ log.json
 *.o
 out.txt
 in/test.txt
+vis.ipynb
