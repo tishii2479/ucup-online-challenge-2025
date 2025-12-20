@@ -6,7 +6,14 @@ pub trait Interactor {
     fn read_input(&mut self) -> Input;
     fn read_n(&mut self) -> usize;
     fn send_receive_packets(&mut self, t: i64) -> (usize, Vec<Packet>);
-    fn send_execute(&mut self, t: i64, core_id: usize, node_id: usize, s: usize, ids: &[usize]);
+    fn send_execute(
+        &mut self,
+        t: i64,
+        core_id: usize,
+        node_id: usize,
+        s: usize,
+        packets: &[PacketStatus],
+    );
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]>;
     fn send_finish(&mut self);
 }
@@ -114,15 +121,23 @@ impl<I: IO> Interactor for IOInteractor<I> {
         (p, packets)
     }
 
-    fn send_execute(&mut self, t: i64, core_id: usize, node_id: usize, s: usize, ids: &[usize]) {
+    fn send_execute(
+        &mut self,
+        t: i64,
+        core_id: usize,
+        node_id: usize,
+        s: usize,
+        packets: &[PacketStatus],
+    ) {
         self.io.write_line(&format!(
             "E {} {} {} {} {}",
             t,
             core_id + 1,
             node_id + 1,
             s,
-            ids.iter()
-                .map(|x| (x + 1).to_string())
+            packets
+                .iter()
+                .map(|p| (p.id + 1).to_string())
                 .collect::<Vec<_>>()
                 .join(" ")
         ));

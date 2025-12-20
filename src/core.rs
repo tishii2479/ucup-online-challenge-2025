@@ -41,6 +41,13 @@ pub struct Packet {
     pub received_t: i64,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct PacketStatus {
+    pub id: usize,
+    pub is_advanced: bool,
+    pub is_switching_core: bool,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PacketHistory {
