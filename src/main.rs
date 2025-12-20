@@ -594,13 +594,19 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration_b1.lower_bound()
     }
 
-    let mut push_task =
-        |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64, max_received_t: i64| {
-            let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
-            let next_t = next_t(max_received_t, cur_t, input.cost_r);
-            let afford = min_time_limit - (next_t + batch_duration.estimate());
-            tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
-        };
+    let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
+        // timeoutしたものは無視されているので、ここでmax_received_tを計算し直す
+        let mut max_received_t = -INF;
+        for &id in cur_ids {
+            let packet = state.packets[id].as_ref().unwrap();
+            max_received_t = max_received_t.max(packet.received_t);
+        }
+
+        let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
+        let next_t = next_t(max_received_t, cur_t, input.cost_r);
+        let afford = min_time_limit - (next_t + batch_duration.estimate());
+        tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
+    };
 
     for packet_type in 0..N_PACKET_TYPE {
         let duration_b1 = estimate_path_duration(packet_type, 1, input, graph);
@@ -615,8 +621,11 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         });
 
         let mut cur_ids = vec![];
+
+        // timeoutしていないパケットでだけ集計する
         let mut min_time_limit = INF;
         let mut max_received_t = -INF;
+
         for &packet in &packets[packet_type] {
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
@@ -634,7 +643,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 
             if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
                 // バッチを分割する
-                push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
+                push_task(packet_type, &cur_ids, min_time_limit);
 
                 cur_ids.clear();
                 min_time_limit = INF;
@@ -650,7 +659,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
-            push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
+            push_task(packet_type, &cur_ids, min_time_limit);
         }
     }
 
