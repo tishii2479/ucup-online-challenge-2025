@@ -88,6 +88,8 @@ enum Event {
     ResumeCore(usize),
 }
 
+type EventQueue = BinaryHeap<(Reverse<i64>, Event)>;
+
 pub struct GreedySolver {
     tracker_enabled: bool,
 }
@@ -102,7 +104,7 @@ impl Solver for GreedySolver {
     fn solve<I: Interactor>(&self, n: usize, interactor: &mut I, input: &Input, graph: &Graph) {
         let mut tracker = Tracker::new(n, self.tracker_enabled);
 
-        let mut q: BinaryHeap<(Reverse<i64>, Event)> = BinaryHeap::new();
+        let mut q: EventQueue = BinaryHeap::new();
         q.push((Reverse(1), Event::ReceivePacket));
 
         let mut state = State::new(n, input);
@@ -141,6 +143,64 @@ impl Solver for GreedySolver {
     }
 }
 
+/// パケットを処理する
+fn execute_packet(
+    cur_task: &mut Task,
+    cur_t: i64,
+    chunk_ids: Option<&[usize]>,
+    core_id: usize,
+    node_id: usize,
+    packet_special_cost: &Vec<Option<i64>>,
+    input: &Input,
+    graph: &Graph,
+    q: &mut EventQueue,
+    interactor: &mut impl Interactor,
+    tracker: &mut Tracker,
+) {
+    let packet_ids = match chunk_ids {
+        Some(v) => v,
+        None => &cur_task.ids,
+    };
+
+    let dt = if node_id == SPECIAL_NODE_ID {
+        graph.nodes[node_id].costs[packet_ids.len()]
+            + packet_ids
+                .iter()
+                .map(|&id| packet_special_cost[id].unwrap())
+                .sum::<i64>()
+    } else {
+        graph.nodes[node_id].costs[packet_ids.len()]
+    };
+    // 最初はcore=0に受け取っているので、switch costが発生する
+    let switch_cost = if cur_task.path_index == 0 {
+        packet_ids.len() as i64 * input.cost_switch
+    } else {
+        0
+    };
+    cur_task.next_t = cur_t + dt + switch_cost;
+    q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
+
+    interactor.send_execute(cur_t, core_id, node_id, packet_ids.len(), &packet_ids);
+    for id in packet_ids {
+        tracker.add_packet_history(
+            *id,
+            PacketHistory {
+                start_t: cur_t,
+                end_t: cur_task.next_t,
+                core_id,
+            },
+        );
+    }
+    tracker.add_task_log(TaskLog {
+        core_id,
+        start_t: cur_t,
+        end_t: cur_task.next_t,
+        batch_size: packet_ids.len(),
+        packet_type: cur_task.packet_type,
+        path_index: cur_task.path_index,
+    });
+}
+
 /// タスクを進める
 fn process_task(
     state: &mut State,
@@ -149,7 +209,7 @@ fn process_task(
     interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
-    q: &mut BinaryHeap<(Reverse<i64>, Event)>,
+    q: &mut EventQueue,
     tracker: &mut Tracker,
 ) {
     let cur_task = state.cur_tasks[core_id]
@@ -193,43 +253,19 @@ fn process_task(
             chunk_ids.push(*id);
         }
 
-        let dt = if node_id == SPECIAL_NODE_ID {
-            graph.nodes[node_id].costs[chunk_ids.len()]
-                + chunk_ids
-                    .iter()
-                    .map(|&id| state.packet_special_cost[id].unwrap())
-                    .sum::<i64>()
-        } else {
-            graph.nodes[node_id].costs[chunk_ids.len()]
-        };
-        // 最初はcore=0に受け取っているので、switch costが発生する
-        let switch_cost = if cur_task.path_index == 0 {
-            chunk_ids.len() as i64 * input.cost_switch
-        } else {
-            0
-        };
-        cur_task.next_t = t + dt + switch_cost;
-        q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
-
-        interactor.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
-        for id in &chunk_ids {
-            tracker.add_packet_history(
-                *id,
-                PacketHistory {
-                    start_t: t,
-                    end_t: cur_task.next_t,
-                    core_id,
-                },
-            );
-        }
-        tracker.add_task_log(TaskLog {
+        execute_packet(
+            cur_task,
+            t,
+            Some(&chunk_ids),
             core_id,
-            start_t: t,
-            end_t: cur_task.next_t,
-            batch_size: chunk_ids.len(),
-            packet_type: cur_task.packet_type,
-            path_index: cur_task.path_index,
-        });
+            node_id,
+            &state.packet_special_cost,
+            input,
+            graph,
+            q,
+            interactor,
+            tracker,
+        );
 
         // チャンクが完了したか確認する
         let all_chunk_finished = cur_task.is_advanced.iter().all(|&b| b);
@@ -242,45 +278,19 @@ fn process_task(
             }
         }
     } else {
-        // dtを計算する
-        let dt = if node_id == SPECIAL_NODE_ID {
-            graph.nodes[node_id].costs[cur_task.ids.len()]
-                + cur_task
-                    .ids
-                    .iter()
-                    .map(|&id| state.packet_special_cost[id].unwrap())
-                    .sum::<i64>()
-        } else {
-            graph.nodes[node_id].costs[cur_task.ids.len()]
-        };
-        // 最初はcore=0に受け取っているので、switch costが発生する
-        let switch_cost = if cur_task.path_index == 0 {
-            cur_task.ids.len() as i64 * input.cost_switch
-        } else {
-            0
-        };
-        cur_task.next_t = t + dt + switch_cost;
-        q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
-
-        interactor.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
-        for id in &cur_task.ids {
-            tracker.add_packet_history(
-                *id,
-                PacketHistory {
-                    start_t: t,
-                    end_t: cur_task.next_t,
-                    core_id,
-                },
-            );
-        }
-        tracker.add_task_log(TaskLog {
+        execute_packet(
+            cur_task,
+            t,
+            None,
             core_id,
-            start_t: t,
-            end_t: cur_task.next_t,
-            batch_size: cur_task.ids.len(),
-            packet_type: cur_task.packet_type,
-            path_index: cur_task.path_index,
-        });
+            node_id,
+            &state.packet_special_cost,
+            input,
+            graph,
+            q,
+            interactor,
+            tracker,
+        );
 
         // 次のノードへ進む
         cur_task.path_index += 1;
@@ -294,7 +304,7 @@ fn complete_task(
     t: i64,
     input: &Input,
     graph: &Graph,
-    q: &mut BinaryHeap<(Reverse<i64>, Event)>,
+    q: &mut EventQueue,
 ) {
     // タスク完了
     state.cur_tasks[core_id] = None;
@@ -328,7 +338,7 @@ fn receive_packet(
     interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
-    q: &mut BinaryHeap<(Reverse<i64>, Event)>,
+    q: &mut EventQueue,
 ) {
     // パケットを登録する
     let (_, packets) = interactor.send_receive_packets(t);
