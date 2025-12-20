@@ -8,6 +8,7 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
+const MIN_INSERT_BATCH_SIZE: usize = 4;
 const MAX_BATCH_SIZE: usize = 32;
 const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
 
@@ -325,7 +326,7 @@ fn complete_task(
     }
 
     // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
-    let mut tasks = create_tasks(&state, t, input, &graph, INF, 0);
+    let mut tasks = create_tasks(&state, t, input, &graph, INF, 0, false);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -450,20 +451,20 @@ fn estimate_core_duration(state: &State, core_id: usize, input: &Input, graph: &
     ret
 }
 
-/// 割り込み用のタスクを作成する
-fn create_interrupt_tasks() {
-    todo!()
-}
-
 /// 割り込み用のタスクを挿入する
-fn insert_interrupt_tasks(cur_t: i64, state: &State, input: &Input, graph: &Graph) {
-    // 1. 挿入すべきパケットがあるかどうか調べる
+fn insert_interrupt_tasks(
+    cur_t: i64,
+    state: &mut State,
+    input: &Input,
+    graph: &Graph,
+    q: &mut EventQueue,
+) {
+    // 0. 挿入すべきパケットがあるかどうか調べる
     // let min_core_time_limit = cur_t
     //     + (0..input.n_cores)
     //         .map(|core_id| estimate_core_duration(state, core_id, input, graph).upper_bound())
     //         .min()
     //         .unwrap();
-
     // let mut timeout_packet_ids = vec![];
     // for id in state.await_packets.iter() {
     //     let packet = state.packets[*id].as_ref().unwrap();
@@ -473,13 +474,8 @@ fn insert_interrupt_tasks(cur_t: i64, state: &State, input: &Input, graph: &Grap
     //     }
     // }
 
-    // if timeout_packet_ids.is_empty() {
-    //     return;
-    // }
-
     // 1. コアに挿入できるタスクの最大時間を計算する
-    let mut target_core = 0;
-    let mut max_afford_duration = -INF;
+    let mut afford_durations = Vec::with_capacity(input.n_cores);
     for core_id in 0..input.n_cores {
         if !state.idle_tasks[core_id].is_empty() {
             continue;
@@ -495,15 +491,47 @@ fn insert_interrupt_tasks(cur_t: i64, state: &State, input: &Input, graph: &Grap
             .min()
             .unwrap();
         let afford_duration = min_time_limit - complete_t;
-        if afford_duration > max_afford_duration {
-            max_afford_duration = afford_duration;
-            target_core = core_id;
-        }
+        afford_durations.push((afford_duration, core_id));
     }
 
-    // 2. max_afford_duration以内に処理できるタスクを作成する
+    afford_durations.sort_by_key(|&(duration, _)| -duration);
 
-    todo!()
+    // 2. max_afford_duration以内に処理できるタスクを作成する
+    for (max_duration, core_id) in afford_durations {
+        let mut tasks = create_tasks(
+            state,
+            cur_t,
+            input,
+            graph,
+            max_duration,
+            MIN_INSERT_BATCH_SIZE,
+            true,
+        );
+        if let Some(task) = tasks.pop() {
+            eprintln!(
+                "Insert interrupt task on core {} with afford_duration {}, t: {}",
+                core_id, max_duration, cur_t
+            );
+            dbg!(&task);
+            eprintln!(
+                "Estimated duration: {:?}",
+                estimate_task_duration(&task, input, graph, &state.packet_special_cost)
+            );
+
+            // await_packetsから削除する
+            for &p in &task.packets {
+                state.await_packets.remove(p.id);
+            }
+            if let Some(cur_task) = state.cur_tasks[core_id].take() {
+                state.idle_tasks[core_id].push(cur_task);
+                // NOTE: qにはすでにcur_taskのResumeCoreが入っているので追加しなくて良い
+                state.cur_tasks[core_id] = Some(task);
+            } else {
+                q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+                state.cur_tasks[core_id] = Some(task);
+            }
+        }
+    }
 }
 
 /// パケット受信イベントの処理
@@ -524,7 +552,7 @@ fn receive_packet(
     }
 
     // packet_typeごとにタスクを作成して、優先度を計算する
-    let mut tasks = create_tasks(&state, cur_t, input, &graph, INF, 0);
+    let mut tasks = create_tasks(&state, cur_t, input, &graph, INF, 0, false);
 
     // 空いているコアがある限り優先度順にタスクを割り当てる
     for core_id in 0..input.n_cores {
@@ -542,7 +570,7 @@ fn receive_packet(
     }
 
     // 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
-    // insert_interrupt_tasks(cur_t, &state, input, graph);
+    insert_interrupt_tasks(cur_t, state, input, graph, q);
 
     // 次のパケット受信イベントを登録する
     let next_t = cur_t + input.cost_r * 10; // TODO: 調整
@@ -647,6 +675,7 @@ fn create_tasks(
     graph: &Graph,
     max_duration: i64,
     min_batch_size: usize,
+    only_non_timeout: bool,
 ) -> Vec<Task> {
     fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
         (received_t + cost_r).max(cur_t)
@@ -681,6 +710,9 @@ fn create_tasks(
         let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
         let next_t = next_t(max_received_t, cur_t, input.cost_r);
         let afford = min_time_limit - (next_t + batch_duration.estimate());
+        if only_non_timeout && afford < 0 {
+            return;
+        }
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
