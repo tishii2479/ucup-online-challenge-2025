@@ -625,7 +625,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
                 let next_t = next_t(max_received_t, cur_t, input.cost_r);
-                min_time_limit < next_t + new_duration.estimate()
+                min_time_limit < next_t + new_duration.estimate() && cur_ids.len() >= 1
             } else {
                 let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
                 min_time_limit.min(packet.time_limit) < next_t + new_duration.estimate()

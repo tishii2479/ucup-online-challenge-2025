@@ -43,6 +43,15 @@
 - いくつか工夫すればまとめて焼けそう
 - タスクの順序を焼きなます
 
+## タスクの分割
+`is_chunked`ではないなら
+- idsだけを分ける
+
+`is_chunked`なら
+- !is_advanced[i]の個数を比例するように分ける
+- !is_advancedが一つもないならis_chunked=false
+- idsはis_advancedとの対応に気をつけながら分ける
+
 ```
 order[core] := [
     Job { job_index, node_index, [(packet_index, path_index)] }
@@ -76,10 +85,8 @@ job_graph[index] {
     - priority(idle_task) < priority(core_id) となっているはず
     - stackで良いはず
 
-- scoreを比較できるようにする
+## TODO
 - todoを実装する
-- 提出する
-- 改善する
 
 ## IDEA
 - taskをマージした方が良い場合は、パケットを追い付かせてマージさせる
@@ -89,16 +96,10 @@ job_graph[index] {
 - そもそも間に合わないパケットは無視して良い
 - タスクが長い場合に、少し待ってから分割してから並列処理した方が良い場合があるかも
 - 時間が経って、割り込まないといけないタスクができるかも
+- タスクの作成・優先度を賢くする
+- `duration`、`special`の推定を賢くする
+    - `works`が溜まってきたら`special_cost_estimate`を再計算する
 - max(score)なので、一つのケースに時間をかけて、他は適当にやる
 - 一度packetが読まれたら細かく読み込むようにする、終わったら読み込みをやめる
-- `works`が溜まってきたら`special_cost_estimate`を再計算する
 - パラメータのチューニング
-
-## タスクの分割
-`is_chunked`ではないなら
-- idsだけを分ける
-
-`is_chunked`なら
-- !is_advanced[i]の個数を比例するように分ける
-- !is_advancedが一つもないならis_chunked=false
-- idsはis_advancedとの対応に気をつけながら分ける
+- 暫定テストケースを探る
