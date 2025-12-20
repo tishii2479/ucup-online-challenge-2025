@@ -354,9 +354,9 @@ fn complete_task(
 
         // 最後のノードで分割することをやめる
         // FIXME: 分割しても良い場合にダメになる
-        if task.path_index >= graph.paths[task.packet_type].path.len() - 1 {
-            return;
-        }
+        // if task.path_index >= graph.paths[task.packet_type].path.len() - 1 {
+        //     return;
+        // }
 
         // FIXME: task2が完了している場合にtask2が完了するまでcore_idを使えないので、損をしている
         let Some((task1, mut task2)) = split_task(task) else {
@@ -402,7 +402,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         packets2.iter().any(|p| p.is_advanced) && packets2.iter().any(|p| !p.is_advanced);
 
     // 割り振られたidが全て完了していれば、次のノードに進める
-    let task1_path_index = if task.is_chunked && !task1_is_chunked {
+    let task1_path_index = if task.is_chunked && packets1.iter().all(|p| p.is_advanced) {
         for p in packets1.iter_mut() {
             p.is_advanced = false;
         }
@@ -410,7 +410,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
     } else {
         task.path_index
     };
-    let task2_path_index = if task.is_chunked && !task2_is_chunked {
+    let task2_path_index = if task.is_chunked && packets2.iter().all(|p| p.is_advanced) {
         for p in packets2.iter_mut() {
             p.is_advanced = false;
         }
