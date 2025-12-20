@@ -42,6 +42,7 @@ pub struct Packet {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PacketHistory {
     pub start_t: i64,
     pub end_t: i64,
