@@ -1,21 +1,21 @@
 ## タスクの挿入
-1. 挿入すべきパケットがあるか調べる
-    - 条件:
-        - `min_core_time_limit := min_{core}(complete_task_t)`
-        - `packet.time_limit < min_core_time_limit + path_duration[packet_type][1]`を満たす
 1. コアごとに挿入できるタスクの総所要時間を計算する
     - `idle_task`があるなら挿入しない
         - TODO: `idle_task`についても調ベて、`min`をとる
     - `complete_t := cur_taskを完了するt`
     - `afford_duration := min_time_limit[cur_task] - complete_t`
     - TODO: タスクを他のコアに移動できるなら1回まで移動して、余裕を計算する
-2. `afford_duration`が大きい順で、`afford_duration`を超えない範囲でバッチを作成する
+2. `packet_type`ごとに`s=min_batch_size`のバッチを作成する
+    - 処理
+        - time_limitが近い順にpacketを選ぶ
+        - そもそも間に合わないものは選択しない
+3. `timeout`する個数が多い順に`packet_type`、`afford_duration`が小さい順に挿入を試す
     - 条件
         - `new_task_duration < afford_duration`
-        - `next_t[target_core] + new_task_duration <= min_time_limit[new_task]`
-    - TODO: 下限を`min_batch_size`にして、違反量の増分を調べる
+        - `next_t[target_core] + new_task_duration > min_time_limit[new_task]`
+    - TODO: 下限を`min_batch_size`違反量の増分を調べる
         - 違反量が減るなら挿入する
-3. 挿入する
+4. 挿入する
     - `idle_tasks[core].push(cur_tasks[core_id])`
     - `cur_tasks[core_id] = insert task`
     - `q.push((cur_task.next_t.max(insert_task.next_t), ConsumeCore))`
