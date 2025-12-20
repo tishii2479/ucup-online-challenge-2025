@@ -68,7 +68,10 @@
 2. `time_limit[packet_i] := arrive[packet_i] + timeout[packet_i]`が小さい順にソートする
     - TODO: 間に合わないことがわかっているものは優先度を一番下げる
     - TODO: durationはspecial_nodeとそれ以外で分けて評価する
-3. バッチ内のパケットがtimeoutしないように、バッチサイズを`batch_size_limit[packet_type]`まで大きくして、前から分割する
+3. バッチ内のパケットがtimeoutしないように、バッチサイズを`batch_size_limit=32`まで大きくして、前から分割する
     - `afford = min(time_limit[packet_i]) - (t + path_duration[packet_type][s]) > 0`
-    - TODO: `batch_size_limit`はデータを見て決める
 4. 全てをまとめて、バッチごとに`afford`が小さい順にソートする
+
+## TODO:
+- TODO: 間に合わないことがわかっているものは優先度を一番下げる
+- TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む

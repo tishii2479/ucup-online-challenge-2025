@@ -22,5 +22,5 @@ python3 problem/interactive_runner.py ./problem/interactor.o in/0004.txt out.txt
 echo "seed=2, n=200, n_cores=2, arrive_terms=10"
 python3 problem/interactive_runner.py ./problem/interactor.o in/0005.txt out.txt -- ./sol
 
-echo "seed=13, n=200, n_cores=2, arrive_terms=10"
-python3 problem/interactive_runner.py ./problem/interactor.o in/0006.txt out.txt -- ./sol
+# echo "seed=13, n=200, n_cores=2, arrive_terms=10"
+# python3 problem/interactive_runner.py ./problem/interactor.o in/0006.txt out.txt -- ./sol

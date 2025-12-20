@@ -7,6 +7,8 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 use crate::{core::*, interactor::*, libb::*};
 
 const DEBUG: bool = true;
+const MAX_BATCH_SIZE: usize = 32;
+const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
 
 fn main() {
     let io = StdIO::new(false);
@@ -431,6 +433,50 @@ fn estimate_core_end_t(state: &State, core_id: usize, input: &Input, graph: &Gra
     ret
 }
 
+/// パケット受信イベントの処理
+fn receive_packet(
+    state: &mut State,
+    t: i64,
+    interactor: &mut impl Interactor,
+    input: &Input,
+    graph: &Graph,
+    q: &mut EventQueue,
+) {
+    // パケットを登録する
+    let (_, packets) = interactor.send_receive_packets(t);
+    for packet in packets {
+        let i = packet.i;
+        state.packets[i] = Some(packet);
+        state.await_packets.add(i);
+    }
+
+    // packet_typeごとにタスクを作成して、優先度を計算する
+    let mut tasks = create_tasks(&state, t, input, &graph);
+
+    // 空いているコアがある限り優先度順にタスクを割り当てる
+    for core_id in 0..input.n_cores {
+        if state.cur_tasks[core_id].is_some() {
+            continue;
+        }
+        if let Some(task) = tasks.pop() {
+            // await_packetsから削除する
+            for &p in &task.packets {
+                state.await_packets.remove(p.id);
+            }
+            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+            state.cur_tasks[core_id] = Some(task);
+        }
+    }
+
+    // TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
+
+    // 次のパケット受信イベントを登録する
+    let next_t = t + input.cost_r * 10; // TODO: 調整
+    if next_t <= LAST_PACKET_T {
+        q.push((Reverse(next_t), Event::ReceivePacket));
+    }
+}
+
 /// タスクを終了するのにかかる時間を見積もる
 fn estimate_task_duration(
     task: &Task,
@@ -491,50 +537,6 @@ fn estimate_task_duration(
     ret
 }
 
-/// パケット受信イベントの処理
-fn receive_packet(
-    state: &mut State,
-    t: i64,
-    interactor: &mut impl Interactor,
-    input: &Input,
-    graph: &Graph,
-    q: &mut EventQueue,
-) {
-    // パケットを登録する
-    let (_, packets) = interactor.send_receive_packets(t);
-    for packet in packets {
-        let i = packet.i;
-        state.packets[i] = Some(packet);
-        state.await_packets.add(i);
-    }
-
-    // `packet_type`ごとにタスクを作成して、優先度を計算する
-    let mut tasks = create_tasks(&state, t, input, &graph);
-
-    // 空いているコアがある限り優先度順にタスクを割り当てる
-    for core_id in 0..input.n_cores {
-        if state.cur_tasks[core_id].is_some() {
-            continue;
-        }
-        if let Some(task) = tasks.pop() {
-            // await_packetsから削除する
-            for &p in &task.packets {
-                state.await_packets.remove(p.id);
-            }
-            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-            state.cur_tasks[core_id] = Some(task);
-        }
-    }
-
-    // TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
-
-    // 次のパケット受信イベントを登録する
-    let next_t = t + input.cost_r * 10; // TODO: 調整
-    if next_t <= LAST_PACKET_T {
-        q.push((Reverse(next_t), Event::ReceivePacket));
-    }
-}
-
 /// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
 /// TODO: 前計算
 fn estimate_path_duration(
@@ -569,8 +571,6 @@ fn estimate_path_duration(
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
-    const MAX_BATCH_SIZE: usize = 32;
-
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -642,4 +642,23 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             }
         })
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct Duration {
+    fixed: i64,
+    special_node_count: i64,
+}
+
+impl Duration {
+    fn new(fixed: i64, special_node_count: i64) -> Self {
+        Self {
+            fixed,
+            special_node_count,
+        }
+    }
+
+    fn total(&self, special_cost_estimate: i64) -> i64 {
+        self.fixed + self.special_node_count * special_cost_estimate / 2
+    }
 }

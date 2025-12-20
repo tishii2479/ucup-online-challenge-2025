@@ -92,6 +92,7 @@ job_graph[index] {
 - max(score)なので、一つのケースに時間をかけて、他は適当にやる
 - 一度packetが読まれたら細かく読み込むようにする、終わったら読み込みをやめる
 - `works`が溜まってきたら`special_cost_estimate`を再計算する
+- パラメータのチューニング
 
 ## タスクの分割
 `is_chunked`ではないなら
