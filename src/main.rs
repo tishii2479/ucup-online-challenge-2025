@@ -608,7 +608,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         // TODO: そもそも間に合わないパケットは優先度を一番下げる
         packets[packet_type].sort_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &duration_b1) {
-                packet.time_limit
+                // packet.time_limit
+                INF
             } else {
                 packet.time_limit
             }
@@ -637,8 +638,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                 push_task(packet_type, &cur_ids, min_time_limit, max_received_t);
 
                 cur_ids.clear();
-                min_time_limit = i64::MAX;
-                max_received_t = i64::MIN;
+                min_time_limit = INF;
+                max_received_t = -INF;
             }
 
             if !is_timeouted_packet {
