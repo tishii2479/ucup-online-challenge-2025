@@ -6,14 +6,14 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{core::*, interactor::*, libb::*};
 
-const DEBUG: bool = true;
+const TRACK: bool = true;
 const MAX_BATCH_SIZE: usize = 32;
 const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
 
 fn main() {
     let io = StdIO::new(false);
     let interactor = IOInteractor::new(io);
-    let solver = GreedySolver::new(DEBUG);
+    let solver = GreedySolver::new(TRACK);
     let runner = Runner;
     let _ = runner.run(solver, interactor);
 }

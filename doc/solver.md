@@ -23,6 +23,7 @@
 1. `(t, ResumeCore(core_id))`を受け取る
 2. `node_id = 8`なら`works`を問い合わせる
     - TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
+        - NOTE: upper_boundで評価しているので、現状効果がない
         1. `min(timeout) < t + duration`なら間に合わないので、以下をする
         2. `timeout[packet_i] - (t + path_duration[packet_i])`が小さい順にソートする
             - NOTE: worksが判明したのでpath_durationはpacket_iごとに異なる
