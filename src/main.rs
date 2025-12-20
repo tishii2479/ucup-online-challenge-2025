@@ -375,6 +375,26 @@ fn complete_task(
     // NOTE: なければパケットが来るまで待機で良い
 }
 
+fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>) -> Task {
+    let is_chunked =
+        packets.iter().any(|p| p.is_advanced) && packets.iter().any(|p| !p.is_advanced);
+    let path_index = if original.is_chunked && packets.iter().all(|p| p.is_advanced) {
+        for p in packets.iter_mut() {
+            p.is_advanced = false;
+        }
+        original.path_index + 1
+    } else {
+        original.path_index
+    };
+    Task {
+        next_t: original.next_t,
+        packet_type: original.packet_type,
+        path_index,
+        is_chunked,
+        packets,
+    }
+}
+
 /// タスクを分割する
 fn split_task(task: &Task) -> Option<(Task, Task)> {
     if task.packets.len() < 2 {
@@ -394,43 +414,8 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         }
     }
 
-    let task1_is_chunked =
-        packets1.iter().any(|p| p.is_advanced) && packets1.iter().any(|p| !p.is_advanced);
-    let task2_is_chunked =
-        packets2.iter().any(|p| p.is_advanced) && packets2.iter().any(|p| !p.is_advanced);
-
-    // 割り振られたidが全て完了していれば、次のノードに進める
-    let task1_path_index = if task.is_chunked && packets1.iter().all(|p| p.is_advanced) {
-        for p in packets1.iter_mut() {
-            p.is_advanced = false;
-        }
-        task.path_index + 1
-    } else {
-        task.path_index
-    };
-    let task2_path_index = if task.is_chunked && packets2.iter().all(|p| p.is_advanced) {
-        for p in packets2.iter_mut() {
-            p.is_advanced = false;
-        }
-        task.path_index + 1
-    } else {
-        task.path_index
-    };
-
-    let task1 = Task {
-        next_t: task.next_t,
-        packet_type: task.packet_type,
-        path_index: task1_path_index,
-        packets: packets1,
-        is_chunked: task1_is_chunked,
-    };
-    let task2 = Task {
-        next_t: task.next_t,
-        packet_type: task.packet_type,
-        path_index: task2_path_index,
-        packets: packets2,
-        is_chunked: task2_is_chunked,
-    };
+    let task1 = build_task_from_split(task, packets1);
+    let task2 = build_task_from_split(task, packets2);
 
     Some((task1, task2))
 }

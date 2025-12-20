@@ -54,7 +54,7 @@
     - `cur_task[core_id] = idle_task[core_id].pop()`とする
     - `q.push((t, ResumeCore(core_id))`
 2. `idle_task`がなければ、最も優先度の高いタスクを割り当てて開始する
-3. TODO: パケットが残っていなければ、他のコアから分割してタスクをもらってくる
+3. パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     1. 処理終了時間が最も長いコアを見つける
     2. idle_taskがあるならそのままもらってくる
     3. busiest_coreのcur_taskを半分に分ける

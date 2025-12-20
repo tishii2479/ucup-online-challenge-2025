@@ -76,12 +76,14 @@ job_graph[index] {
     - priority(idle_task) < priority(core_id) となっているはず
     - stackで良いはず
 
+- scoreを比較できるようにする
 - todoを実装する
 - 提出する
 - 改善する
 
 ## IDEA
 - taskをマージした方が良い場合は、パケットを追い付かせてマージさせる
+    - 全体が遅れるので、少し負の評価をつける
 - `path_duration[packet_type]`は`works`が溜まってきたら再計算する
 - 他のコアで同じノードのタスクも消費する
 - そもそも間に合わないパケットは無視して良い
