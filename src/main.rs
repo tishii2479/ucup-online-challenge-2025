@@ -1,18 +1,13 @@
 mod core;
+mod interactor;
 mod libb;
 mod values;
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
-use crate::{core::*, libb::*};
+use crate::{core::*, interactor::*, libb::*};
 
 fn main() {
-    let p = ProblemParams {
-        n: 1000,
-        n_cores: 8,
-        arrive_term: 1000,
-    };
-    let interactor = MockInteractor::new(123456789, p);
     let interactor = IOInteractor::new(StdIO::new(false));
     let solver = GreedySolver;
     let runner = Runner;
@@ -22,28 +17,15 @@ fn main() {
 pub struct Runner;
 
 impl Runner {
-    pub fn run(&self, solver: impl Solver, mut interactor: impl Interactor) -> i64 {
+    pub fn run(&self, solver: impl Solver, mut interactor: impl Interactor) {
         let graph = interactor.read_graph();
         let input = interactor.read_input();
         eprintln!("input: {:?}", input);
 
-        let mut scores = vec![];
         for _ in 0..N_SUBTASK {
             let n = interactor.read_n();
-            let mut tester = Tester::new(&mut interactor, n, input.clone(), graph.clone());
-            let score = solver.solve(n, &mut tester, &input, &graph);
-
-            eprintln!(
-                "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.5})",
-                score.to_score(),
-                score.throughput,
-                score.timeout_rate
-            );
-            dump_task_logs(&tester.task_logs);
-
-            scores.push(score.to_score());
+            solver.solve(n, &mut interactor, &input, &graph);
         }
-        scores.iter().map(|&s| s as i64).max().unwrap()
     }
 }
 
@@ -125,13 +107,7 @@ enum Event {
 pub struct GreedySolver;
 
 impl Solver for GreedySolver {
-    fn solve<I: Interactor>(
-        &self,
-        n: usize,
-        tester: &mut Tester<I>,
-        input: &Input,
-        graph: &Graph,
-    ) -> Score {
+    fn solve<I: Interactor>(&self, n: usize, interactor: &mut I, input: &Input, graph: &Graph) {
         let mut q: BinaryHeap<(Reverse<i64>, Event)> = BinaryHeap::new();
         q.push((Reverse(1), Event::ReceivePacket));
 
@@ -139,7 +115,7 @@ impl Solver for GreedySolver {
         while let Some((t, event)) = q.pop() {
             match event {
                 Event::ReceivePacket => {
-                    receive_packet(&mut state, t.0, tester, input, graph, &mut q);
+                    receive_packet(&mut state, t.0, interactor, input, graph, &mut q);
                 }
                 Event::ResumeCore(core_id) => {
                     // タスクが完了したか確認する
@@ -150,12 +126,12 @@ impl Solver for GreedySolver {
                         }
                     }
 
-                    process_task(&mut state, core_id, t.0, tester, input, graph, &mut q);
+                    process_task(&mut state, core_id, t.0, interactor, input, graph, &mut q);
                 }
             }
         }
 
-        tester.send_finish()
+        interactor.send_finish();
     }
 }
 
@@ -164,7 +140,7 @@ fn process_task(
     state: &mut State,
     core_id: usize,
     t: i64,
-    tester: &mut Tester<impl Interactor>,
+    interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
     q: &mut BinaryHeap<(Reverse<i64>, Event)>,
@@ -180,7 +156,7 @@ fn process_task(
             if state.packet_special_cost[packet_i].is_some() {
                 continue;
             }
-            let work = tester.send_query_works(t, packet_i).unwrap();
+            let work = interactor.send_query_works(t, packet_i).unwrap();
             let mut cost_sum = 0;
             for i in 0..N_SPECIAL {
                 if work[i] {
@@ -228,7 +204,7 @@ fn process_task(
         cur_task.next_t = t + dt + switch_cost;
         q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
-        tester.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
+        interactor.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
 
         // チャンクが完了したか確認する
         let all_chunk_finished = cur_task.is_advanced.iter().all(|&b| b);
@@ -261,7 +237,7 @@ fn process_task(
         cur_task.next_t = t + dt + switch_cost;
         q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
-        tester.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
+        interactor.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
 
         // 次のノードへ進む
         cur_task.path_index += 1;
@@ -306,13 +282,13 @@ fn complete_task(
 fn receive_packet(
     state: &mut State,
     t: i64,
-    tester: &mut Tester<impl Interactor>,
+    interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
     q: &mut BinaryHeap<(Reverse<i64>, Event)>,
 ) {
     // パケットを登録する
-    let packets = tester.send_receive_packets(t);
+    let (_, packets) = interactor.send_receive_packets(t);
     for packet in packets {
         let i = packet.i;
         state.packets[i] = Some(packet);
