@@ -478,9 +478,9 @@ fn receive_packet(
     }
 
     // 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
-    while let Some(task) = tasks.pop() {
-        // タスクを差し込まないとtimeoutが発生するかどうか調べる
-    }
+    // while let Some(task) = tasks.pop() {
+    // タスクを差し込まないとtimeoutが発生するかどうか調べる
+    // }
 
     // 次のパケット受信イベントを登録する
     let next_t = t + input.cost_r * 10; // TODO: 調整
