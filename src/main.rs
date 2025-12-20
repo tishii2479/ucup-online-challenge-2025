@@ -9,7 +9,8 @@ use crate::{core::*, interactor::*, libb::*};
 const DEBUG: bool = true;
 
 fn main() {
-    let interactor = IOInteractor::new(StdIO::new(false));
+    let io = StdIO::new(false);
+    let interactor = IOInteractor::new(io);
     let solver = GreedySolver::new(DEBUG);
     let runner = Runner;
     let _ = runner.run(solver, interactor);
@@ -350,6 +351,14 @@ fn complete_task(
         let Some(task) = &state.cur_tasks[busiest_core_id] else {
             return;
         };
+
+        // taskがすでに完了していれば分けない
+        // NOTE: 最後が大きいチャンクの場合に分割していないと損をするかも
+        let is_completed_task = task.path_index >= graph.paths[task.packet_type].path.len() - 1;
+        if is_completed_task {
+            return;
+        }
+
         let Some((task1, mut task2)) = split_task(task) else {
             return;
         };
@@ -391,6 +400,17 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
         packets1.iter().any(|p| p.is_advanced) && packets1.iter().any(|p| !p.is_advanced);
     let task2_is_chunked =
         packets2.iter().any(|p| p.is_advanced) && packets2.iter().any(|p| !p.is_advanced);
+
+    if !task1_is_chunked {
+        for p in packets1.iter_mut() {
+            p.is_advanced = false;
+        }
+    }
+    if !task2_is_chunked {
+        for p in packets2.iter_mut() {
+            p.is_advanced = false;
+        }
+    }
 
     let task1 = Task {
         next_t: task.next_t,

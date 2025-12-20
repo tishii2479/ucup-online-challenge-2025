@@ -237,11 +237,11 @@ void Run()
                 int pos = pkts[idx].pos;
                 int type = pkts[idx].type;
                 if (pos < 0 || pos >= (int)path[type].size())
-                    Fail("Invalid Action: illegal nodeId for packet " +
-                         to_string(idx));
+                    Fail("[1] Invalid Action: illegal nodeId for packet " +
+                         to_string(idx) + ", pos=" + to_string(pos));
                 int curNode = path[type][pos];
                 if (curNode != nodeId)
-                    Fail("Invalid Action: illegal nodeId for packet " +
+                    Fail("[2] Invalid Action: illegal nodeId for packet " +
                          to_string(idx));
                 if (t < pkts[idx].t)
                     Fail("Invalid Action: packet " + to_string(idx) +
