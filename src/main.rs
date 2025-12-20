@@ -7,9 +7,11 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{core::*, interactor::*, libb::*};
 
+const DEBUG: bool = true;
+
 fn main() {
     let interactor = IOInteractor::new(StdIO::new(false));
-    let solver = GreedySolver;
+    let solver = GreedySolver::new(DEBUG);
     let runner = Runner;
     let _ = runner.run(solver, interactor);
 }
@@ -104,10 +106,20 @@ enum Event {
     ResumeCore(usize),
 }
 
-pub struct GreedySolver;
+pub struct GreedySolver {
+    tracker_enabled: bool,
+}
+
+impl GreedySolver {
+    pub fn new(tracker_enabled: bool) -> Self {
+        Self { tracker_enabled }
+    }
+}
 
 impl Solver for GreedySolver {
     fn solve<I: Interactor>(&self, n: usize, interactor: &mut I, input: &Input, graph: &Graph) {
+        let mut tracker = Tracker::new(n, self.tracker_enabled);
+
         let mut q: BinaryHeap<(Reverse<i64>, Event)> = BinaryHeap::new();
         q.push((Reverse(1), Event::ReceivePacket));
 
@@ -126,12 +138,30 @@ impl Solver for GreedySolver {
                         }
                     }
 
-                    process_task(&mut state, core_id, t.0, interactor, input, graph, &mut q);
+                    process_task(
+                        &mut state,
+                        core_id,
+                        t.0,
+                        interactor,
+                        input,
+                        graph,
+                        &mut q,
+                        &mut tracker,
+                    );
                 }
             }
         }
 
         interactor.send_finish();
+
+        let score = tracker.calc_score(n, &state.packets, graph, input);
+        eprintln!(
+            "score: {:10.2} (throughput: {:8.2}, timeout_rate: {:6.5})",
+            score.to_score(),
+            score.throughput,
+            score.timeout_rate
+        );
+        dump_task_logs(&tracker.task_logs);
     }
 }
 
@@ -144,6 +174,7 @@ fn process_task(
     input: &Input,
     graph: &Graph,
     q: &mut BinaryHeap<(Reverse<i64>, Event)>,
+    tracker: &mut Tracker,
 ) {
     let cur_task = state.cur_tasks[core_id]
         .as_mut()
@@ -205,6 +236,24 @@ fn process_task(
         q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
         interactor.send_execute(t, core_id, node_id, chunk_ids.len(), &chunk_ids);
+        for id in &chunk_ids {
+            tracker.add_packet_history(
+                *id,
+                PacketHistory {
+                    start_t: t,
+                    end_t: cur_task.next_t,
+                    core_id,
+                },
+            );
+        }
+        tracker.add_task_log(TaskLog {
+            core_id,
+            start_t: t,
+            end_t: cur_task.next_t,
+            batch_size: chunk_ids.len(),
+            packet_type: cur_task.packet_type,
+            path_index: cur_task.path_index,
+        });
 
         // チャンクが完了したか確認する
         let all_chunk_finished = cur_task.is_advanced.iter().all(|&b| b);
@@ -238,6 +287,24 @@ fn process_task(
         q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
         interactor.send_execute(t, core_id, node_id, cur_task.ids.len(), &cur_task.ids);
+        for id in &cur_task.ids {
+            tracker.add_packet_history(
+                *id,
+                PacketHistory {
+                    start_t: t,
+                    end_t: cur_task.next_t,
+                    core_id,
+                },
+            );
+        }
+        tracker.add_task_log(TaskLog {
+            core_id,
+            start_t: t,
+            end_t: cur_task.next_t,
+            batch_size: cur_task.ids.len(),
+            packet_type: cur_task.packet_type,
+            path_index: cur_task.path_index,
+        });
 
         // 次のノードへ進む
         cur_task.path_index += 1;
