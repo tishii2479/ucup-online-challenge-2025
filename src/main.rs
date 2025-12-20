@@ -603,12 +603,11 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         };
 
     for packet_type in 0..N_PACKET_TYPE {
-        // パケットを締め切り順にソートする
         let duration_b1 = estimate_path_duration(packet_type, 1, input, graph);
-        // TODO: そもそも間に合わないパケットは優先度を一番下げる
+        // パケットを締め切り順にソートする
         packets[packet_type].sort_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &duration_b1) {
-                // packet.time_limit
+                // そもそも間に合わないパケットは優先度を一番下げる
                 INF
             } else {
                 packet.time_limit
