@@ -577,6 +577,8 @@ fn estimate_path_duration(
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
+    const INF: i64 = 1_000_000_000_000;
+
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -606,7 +608,6 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         // TODO: そもそも間に合わないパケットは優先度を一番下げる
         packets[packet_type].sort_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &duration_b1) {
-                // i64::MAX
                 packet.time_limit
             } else {
                 packet.time_limit
@@ -614,8 +615,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         });
 
         let mut cur_ids = vec![];
-        let mut min_time_limit = i64::MAX;
-        let mut max_received_t = i64::MIN;
+        let mut min_time_limit = INF;
+        let mut max_received_t = -INF;
         for &packet in &packets[packet_type] {
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
@@ -624,7 +625,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
                 let next_t = next_t(max_received_t, cur_t, input.cost_r);
-                min_time_limit < next_t + new_duration.estimate() && cur_ids.len() >= 1
+                min_time_limit < next_t + new_duration.estimate()
             } else {
                 let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
                 min_time_limit.min(packet.time_limit) < next_t + new_duration.estimate()
@@ -640,8 +641,10 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                 max_received_t = i64::MIN;
             }
 
-            min_time_limit = min_time_limit.min(packet.time_limit);
-            max_received_t = max_received_t.max(packet.received_t);
+            if !is_timeouted_packet {
+                min_time_limit = min_time_limit.min(packet.time_limit);
+                max_received_t = max_received_t.max(packet.received_t);
+            }
             cur_ids.push(packet.i);
         }
 

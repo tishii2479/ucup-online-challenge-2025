@@ -6,6 +6,6 @@ rustc --edition=2024 -O sol.rs
 
 for seed in {0..100}; do
     echo "Running test with seed $seed"
-    python gen.py --seed $seed --n 5000 --n-cores 2 --arrive-term 100000 > in/test.txt
+    python gen.py --seed $seed --n 5000 --n-cores 2 --arrive-term 10 > in/test.txt
     python3 problem/interactive_runner.py ./problem/interactor.o in/test.txt out.txt -- ./sol
 done
