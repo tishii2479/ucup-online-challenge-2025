@@ -333,35 +333,37 @@ fn complete_task(
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     // 最も処理終了時間が長いコアを見つける
-    let busiest_core_id = (0..input.n_cores)
-        .filter(|&id| id != core_id)
-        .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph))
-        .unwrap();
+    if input.n_cores > 1 {
+        let busiest_core_id = (0..input.n_cores)
+            .filter(|&id| id != core_id)
+            .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph))
+            .unwrap();
 
-    // idle_tasksがあるならそのままもらってくる
-    if let Some(task) = state.idle_tasks[busiest_core_id].pop() {
-        q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-        state.cur_tasks[core_id] = Some(task);
-        return;
+        // idle_tasksがあるならそのままもらってくる
+        if let Some(task) = state.idle_tasks[busiest_core_id].pop() {
+            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+            state.cur_tasks[core_id] = Some(task);
+            return;
+        }
+
+        // busiest_coreのcur_taskを半分に分ける
+        let Some(task) = &state.cur_tasks[busiest_core_id] else {
+            return;
+        };
+        let Some((task1, mut task2)) = split_task(task) else {
+            return;
+        };
+
+        // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
+        state.cur_tasks[busiest_core_id] = Some(task1);
+
+        task2
+            .packets
+            .iter_mut()
+            .for_each(|p| p.is_switching_core = true);
+        q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
+        state.cur_tasks[core_id] = Some(task2);
     }
-
-    // busiest_coreのcur_taskを半分に分ける
-    let Some(task) = &state.cur_tasks[busiest_core_id] else {
-        return;
-    };
-    let Some((task1, mut task2)) = split_task(task) else {
-        return;
-    };
-
-    // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
-    state.cur_tasks[busiest_core_id] = Some(task1);
-
-    task2
-        .packets
-        .iter_mut()
-        .for_each(|p| p.is_switching_core = true);
-    q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
-    state.cur_tasks[core_id] = Some(task2);
 
     // NOTE: なければパケットが来るまで待機で良い
 }
