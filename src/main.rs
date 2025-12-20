@@ -352,13 +352,13 @@ fn complete_task(
             return;
         };
 
-        // taskがすでに完了していれば分けない
-        // NOTE: 最後が大きいチャンクの場合に分割していないと損をするかも
-        let is_completed_task = task.path_index >= graph.paths[task.packet_type].path.len() - 1;
-        if is_completed_task {
+        // 最後のノードで分割することをやめる
+        // FIXME: 分割しても良い場合にダメになる
+        if task.path_index >= graph.paths[task.packet_type].path.len() - 1 {
             return;
         }
 
+        // FIXME: task2が完了している場合にtask2が完了するまでcore_idを使えないので、損をしている
         let Some((task1, mut task2)) = split_task(task) else {
             return;
         };
@@ -401,28 +401,35 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
     let task2_is_chunked =
         packets2.iter().any(|p| p.is_advanced) && packets2.iter().any(|p| !p.is_advanced);
 
-    if !task1_is_chunked {
+    // 割り振られたidが全て完了していれば、次のノードに進める
+    let task1_path_index = if task.is_chunked && !task1_is_chunked {
         for p in packets1.iter_mut() {
             p.is_advanced = false;
         }
-    }
-    if !task2_is_chunked {
+        task.path_index + 1
+    } else {
+        task.path_index
+    };
+    let task2_path_index = if task.is_chunked && !task2_is_chunked {
         for p in packets2.iter_mut() {
             p.is_advanced = false;
         }
-    }
+        task.path_index + 1
+    } else {
+        task.path_index
+    };
 
     let task1 = Task {
         next_t: task.next_t,
         packet_type: task.packet_type,
-        path_index: task.path_index,
+        path_index: task1_path_index,
         packets: packets1,
         is_chunked: task1_is_chunked,
     };
     let task2 = Task {
         next_t: task.next_t,
         packet_type: task.packet_type,
-        path_index: task.path_index,
+        path_index: task2_path_index,
         packets: packets2,
         is_chunked: task2_is_chunked,
     };

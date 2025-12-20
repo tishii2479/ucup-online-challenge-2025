@@ -24,5 +24,10 @@ rustc --edition=2024 -O sol.rs
 # echo "best: 265482"
 # python3 problem/interactive_runner.py ./problem/interactor.o in/0004.txt out.txt -- ./sol
 
-echo "n=200, n_cores=2, arrive_terms=10"
-python3 problem/interactive_runner.py ./problem/interactor.o in/0005.txt out.txt -- ./sol
+# echo "seed=2, n=200, n_cores=2, arrive_terms=10"
+# echo "best: 461506"
+# python3 problem/interactive_runner.py ./problem/interactor.o in/0005.txt out.txt -- ./sol
+
+echo "seed=13, n=200, n_cores=2, arrive_terms=10"
+echo "best: 418831"
+python3 problem/interactive_runner.py ./problem/interactor.o in/0006.txt out.txt -- ./sol
