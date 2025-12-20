@@ -1,3 +1,26 @@
+## タスクの挿入
+1. 挿入すべきパケットがあるか調べる
+    - 条件:
+        - `min_core_time_limit := min_{core}(complete_task_t)`
+        - `packet.time_limit < min_core_time_limit + path_duration[packet_type][1]`を満たす
+2. コアに挿入できるタスクの総所要時間を計算する
+    - `idle_task`があるなら挿入しない
+        - TODO: `idle_task`についても調ベて、`min`をとる
+    - `complete_t := cur_taskを完了するt`
+    - `afford_duration := min_time_limit[cur_task] - complete_t`
+    - TODO: タスクを他のコアに移動できるなら1回まで移動して、余裕を計算する
+    - `afford_duration`が最も大きいコアを挿入先のコア`target_core`とする
+3. `afford_duration`を超えない範囲でバッチを作成する
+    - 条件
+        - `new_task_duration < afford_duration`
+        - `next_t[target_core] + new_task_duration <= min_time_limit[new_task]`
+    - TODO: 下限を`min_batch_size`にして、違反量の増分を調べる
+        - 違反量が減るなら挿入する
+4. 挿入する
+    - `idle_tasks[core].push(cur_tasks[core_id])`
+    - `cur_tasks[core_id] = insert task`
+    - `q.push((cur_task.next_t.max(insert_task.next_t), ConsumeCore))`
+
 ## パケット受け付け
 1. `(t, ReceivePacket)`を受け取る
 2. パケットを受けとる
@@ -6,24 +29,13 @@
     - `cur_tasks[core_id] := Task`
     - `q.push((t, ResumeCore(core_id))`
 5. TODO: 残っているタスクで、割り込むべきタスクがあればコアのタスクに差し込む
-    - 条件: タスクを差し込まないとtimeoutが発生する & 差し込むことでtimeoutするpacketが減る
-        1. コアごとに差し込むタスクの`departure`を計算する
-            - `departure := next_t[core_id] + path_duration[packet_type][1] * (1+a)`
-        2. コアごとに差し込まれる`idle_tasks`の新しい`departure[core_id]`を計算する
-            - `departure[core_id][idle_i] := departure[idle_i+1] + remaining_duration[core_id] * (1+a)`
-        3. timeoutするpacketの個数をコアごとに計算する
-        4. コアごとに変化分を計算する
-        5. timeoutが最も減るコアを挿入先とする（どのコアも余裕がなければ諦める）
-    - 処理: core_idに挿入する
-        1. `idle_tasks[core_id].push(cur_tasks[core_id])`
-        2. `cur_tasks[core_id] = insert task`
 6. `q.push((t + d, RecievePacket))`
 
 ## コアごとの処理 (cur_tasks[core_id] != None)
 1. `(t, ResumeCore(core_id))`を受け取る
 2. `node_id = 8`なら`works`を問い合わせる
     - TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
-        - NOTE: upper_boundで評価しているので、現状効果がない
+        - NOTE: upper_boundで評価しているので、現状は効果がない
         1. `min(timeout) < t + duration`なら間に合わないので、以下をする
         2. `timeout[packet_i] - (t + path_duration[packet_i])`が小さい順にソートする
             - NOTE: worksが判明したのでpath_durationはpacket_iごとに異なる
@@ -58,7 +70,7 @@
 3. パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     1. idle_taskがあるならそのままもらってくる
     2. 分割するコア`split_core`を見つける
-        - 現状: 処理終了時間が最も長いコア
+        - 処理終了時間が最も長いコア
         - TODO: 現状のタスク終了時間が近いコアを選ぶ
         - TODO: 効果が小さいもの（バッチサイズが小さいもの）を弾く
     3. `split_core`のcur_taskを半分に分ける

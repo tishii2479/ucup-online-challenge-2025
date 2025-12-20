@@ -354,13 +354,6 @@ fn complete_task(
             .max_by_key(|&id| estimate_core_duration(&state, id, input, graph).estimate())
             .unwrap();
 
-        // idle_tasksがあるならそのままもらってくる
-        if let Some(task) = state.idle_tasks[busiest_core_id].pop() {
-            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-            state.cur_tasks[core_id] = Some(task);
-            return;
-        }
-
         // busiest_coreのcur_taskを半分に分ける
         let Some(task) = &state.cur_tasks[busiest_core_id] else {
             return;
@@ -453,6 +446,12 @@ fn estimate_core_duration(state: &State, core_id: usize, input: &Input, graph: &
         ));
     }
     ret
+}
+
+/// 割り込み用のタスクを作成する
+fn create_insert_tasks() {
+    // 挿入すべきパケットがあるかどうか調べる
+    todo!()
 }
 
 /// パケット受信イベントの処理

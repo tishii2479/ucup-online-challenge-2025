@@ -19,7 +19,6 @@ CASES = [
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", type=str, default="current")
-    parser.add_argument("--log", action="store_true")
     args = parser.parse_args()
 
     subprocess.run(
@@ -103,7 +102,7 @@ def main() -> None:
     df = pd.concat([df, new_df], ignore_index=True)
     print(df)
 
-    if args.log:
+    if args.version != "current":
         print("Updating doc/scores.csv")
         df.to_csv("doc/scores.csv", index=False)
 
