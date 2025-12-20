@@ -1,6 +1,6 @@
 /target
-a.rs
-a
+sol.rs
+sol
 log.json
 *.o
 out.txt

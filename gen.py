@@ -1,0 +1,48 @@
+SUBTASK = 5
+COST_R = 20
+ARRIVE_START = 1_000_000
+N_PACKET_TYPE = 7
+TIMEOUT_MIN = 1
+TIMEOUT_MAX = 100_000
+N_SPECIAL = 8
+
+
+def gen(seed: int, n: int, n_cores: int, arrive_term: int) -> None:
+    import random
+
+    rnd = random.Random(seed)
+
+    # for fixed graph
+    with open("problem/example.in", "r") as f:
+        for _ in range(28):
+            print(f.readline().rstrip())
+
+    cost_switch = rnd.randrange(1, 21)
+    print(n_cores, cost_switch, COST_R)
+
+    for _ in range(SUBTASK):
+        print(n)
+        for i in range(n):
+            arrive = ARRIVE_START + rnd.randrange(0, arrive_term)
+            packet_type = rnd.randrange(0, N_PACKET_TYPE) + 1
+            timeout = rnd.randint(TIMEOUT_MIN, TIMEOUT_MAX)
+            works = rnd.randrange(0, 1 << N_SPECIAL)
+            print(i, arrive, packet_type, timeout, works)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, required=False, default=0)
+    parser.add_argument("--n", type=int, required=True)
+    parser.add_argument("--n-cores", type=int, required=True)
+    parser.add_argument("--arrive-term", type=int, required=True)
+
+    args = parser.parse_args()
+    gen(args.seed, args.n, args.n_cores, args.arrive_term)
+
+
+if __name__ == "__main__":
+
+    main()

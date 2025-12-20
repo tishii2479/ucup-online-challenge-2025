@@ -150,10 +150,10 @@ void Run()
             t = ouf.readInt();
             // tout<<"R "<<t<<endl;
             if (t < 1 || t > MAX_TIME || t < prev_action_time)
-                Fail("Invalid Action: time " + to_string(t));
+                Fail("[1] Invalid Action: time " + to_string(t));
             prev_action_time = t;
             if (t < core_valid_time[0])
-                Fail("Invalid Action: time " + to_string(t));
+                Fail("[2] Invalid Action: time " + to_string(t));
             core_valid_time[0] = t + c_r;
 
             // send pkts
@@ -263,7 +263,7 @@ void Run()
             t = ouf.readInt();
             // tout<<"Q "<<t;
             if (t < 1 || t > MAX_TIME || t < prev_action_time)
-                Fail("Invalid Action: time " + to_string(t));
+                Fail("[4] Invalid Action: time " + to_string(t));
             prev_action_time = t;
             int idx = ouf.readInt();
             // tout<<" "<<idx<<endl;

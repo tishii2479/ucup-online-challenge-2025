@@ -13,7 +13,7 @@ fn main() {
         arrive_term: 1000,
     };
     let interactor = MockInteractor::new(123456789, p);
-    // let interactor = IOInteractor::new(StdIO::new(false));
+    let interactor = IOInteractor::new(StdIO::new(false));
     let solver = GreedySolver;
     let runner = Runner;
     let _ = runner.run(solver, interactor);
@@ -398,14 +398,16 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
             let packet_time_limit = packet.arrive + packet.timeout;
+            assert!(packet.received_t >= 0);
             if min_time_limit.min(packet_time_limit)
-                < max_received_t.max(packet.received_t) + new_duration * (1 + 0)
+                < max_received_t.max(packet.received_t) + new_duration
                 && cur_ids.len() > 0
             {
                 // バッチを分割する
                 let batch_duration =
                     estimate_path_duration(packet.packet_type, cur_ids.len(), input, graph);
-                let afford = min_time_limit - (max_received_t + batch_duration + (1 + 0));
+                let next_t = (max_received_t + input.cost_r).max(cur_t);
+                let afford = min_time_limit - (next_t + batch_duration);
                 tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
 
                 cur_ids.clear();
@@ -421,7 +423,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
             let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
-            let afford = min_time_limit - (max_received_t + batch_duration + (1 + 0));
+            let next_t = (max_received_t + input.cost_r).max(cur_t);
+            let afford = min_time_limit - (next_t + batch_duration);
             tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
         }
     }

@@ -1,3 +1,5 @@
+# type: ignore
+
 # This code can be run as python2 or python3 in most systems.
 #
 # This is a small program that runs two processes, connecting the stdin of each

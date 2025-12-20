@@ -88,9 +88,12 @@ job_graph[index] {
     - priority(idle_task) < priority(core_id) となっているはず
     - stackで良いはず
 
+- ファイル書き出しをする
+- tester、mockを削除する
+- スコアを計測する
+- リファクタリング
+- todoを実装する
 - 提出する
-- visualizerを作る
-- パラメータごとのスコアを記録する
 - 改善する
 
 ## TODO
