@@ -339,7 +339,7 @@ fn complete_task(
     if input.n_cores > 1 {
         let busiest_core_id = (0..input.n_cores)
             .filter(|&id| id != core_id)
-            .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph))
+            .max_by_key(|&id| estimate_core_end_t(&state, id, input, graph).estimate())
             .unwrap();
 
         // idle_tasksがあるならそのままもらってくる
@@ -422,13 +422,23 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
     Some((task1, task2))
 }
 
-fn estimate_core_end_t(state: &State, core_id: usize, input: &Input, graph: &Graph) -> i64 {
-    let mut ret = 0;
+fn estimate_core_end_t(state: &State, core_id: usize, input: &Input, graph: &Graph) -> Duration {
+    let mut ret = Duration::new(0, 0);
     if let Some(cur_task) = &state.cur_tasks[core_id] {
-        ret += estimate_task_duration(cur_task, input, graph, &state.packet_special_cost)
+        ret.add(&estimate_task_duration(
+            cur_task,
+            input,
+            graph,
+            &state.packet_special_cost,
+        ));
     }
     for idle_task in &state.idle_tasks[core_id] {
-        ret += estimate_task_duration(idle_task, input, graph, &state.packet_special_cost)
+        ret.add(&estimate_task_duration(
+            idle_task,
+            input,
+            graph,
+            &state.packet_special_cost,
+        ));
     }
     ret
 }
@@ -483,22 +493,20 @@ fn estimate_task_duration(
     input: &Input,
     graph: &Graph,
     packet_special_cost: &Vec<Option<i64>>,
-) -> i64 {
-    // TODO: worksを開示したら更新する
-    let special_cost_estimate = graph.special_costs.iter().sum::<i64>() / 2;
+) -> Duration {
     let first_packets = if task.is_chunked {
         task.packets.iter().filter(|&&b| !b.is_advanced).count()
     } else {
         task.packets.len()
     };
 
-    let mut ret = 0;
+    let mut ret = Duration::new(0, 0);
 
     let has_next_node = task.path_index < graph.paths[task.packet_type].path.len() - 1;
     for p in &task.packets {
         let need_switch = p.is_switching_core && (p.is_advanced == false || has_next_node);
         if need_switch {
-            ret += input.cost_switch;
+            ret.fixed += input.cost_switch;
         }
     }
 
@@ -513,24 +521,25 @@ fn estimate_task_duration(
         };
         let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
         let full_chunk_count = packets_count / max_batch_size;
-        ret += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
+        ret.fixed += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
 
         let remainder = packets_count % max_batch_size;
-        ret += graph.nodes[*node_id].costs[remainder];
+        ret.fixed += graph.nodes[*node_id].costs[remainder];
 
         if *node_id == SPECIAL_NODE_ID {
-            ret += task
-                .packets
-                .iter()
-                .filter(|&p| {
-                    if i == 0 && task.is_chunked {
-                        !p.is_advanced
-                    } else {
-                        true
-                    }
-                })
-                .map(|p| packet_special_cost[p.id].unwrap_or(special_cost_estimate))
-                .sum::<i64>();
+            for p in task.packets.iter().filter(|&p| {
+                if i == 0 && task.is_chunked {
+                    !p.is_advanced
+                } else {
+                    true
+                }
+            }) {
+                if let Some(special_cost) = packet_special_cost[p.id] {
+                    ret.fixed += special_cost;
+                } else {
+                    ret.special_node_count += 1;
+                }
+            }
         }
     }
 
@@ -544,25 +553,22 @@ fn estimate_path_duration(
     batch_size: usize,
     input: &Input,
     graph: &Graph,
-) -> i64 {
-    // TODO: worksを開示したら更新する
-    let special_cost_estimate = graph.special_costs.iter().sum::<i64>() / 2;
-    let mut ret = 0;
+) -> Duration {
+    let mut ret = Duration::new(0, 0);
 
     // core=0から移るswitch costを考慮する
-    ret += batch_size as i64 * input.cost_switch;
+    ret.fixed += batch_size as i64 * input.cost_switch;
 
     for node_id in &graph.paths[packet_type].path {
         let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
         let full_chunk_count = batch_size / max_batch_size;
-        ret += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
+        ret.fixed += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
 
         let remainder = batch_size % max_batch_size;
-        ret += graph.nodes[*node_id].costs[remainder];
+        ret.fixed += graph.nodes[*node_id].costs[remainder];
 
         if *node_id == SPECIAL_NODE_ID {
-            // TODO: worksを開示したら更新する
-            ret += batch_size as i64 * special_cost_estimate;
+            ret.special_node_count += batch_size as i64;
         }
     }
     ret
@@ -583,7 +589,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64, max_received_t: i64| {
             let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
             let next_t = (max_received_t + input.cost_r).max(cur_t);
-            let afford = min_time_limit - (next_t + batch_duration);
+            let afford = min_time_limit - (next_t + batch_duration.estimate());
             tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
         };
 
@@ -599,7 +605,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
             let changed_to_timeout_batch = min_time_limit.min(packet.time_limit)
-                < max_received_t.max(packet.received_t) + new_duration
+                < max_received_t.max(packet.received_t) + new_duration.estimate()
                 && cur_ids.len() >= 1;
             if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
                 // バッチを分割する
@@ -658,7 +664,17 @@ impl Duration {
         }
     }
 
-    fn total(&self, special_cost_estimate: i64) -> i64 {
-        self.fixed + self.special_node_count * special_cost_estimate / 2
+    fn add(&mut self, other: &Duration) {
+        self.fixed += other.fixed;
+        self.special_node_count += other.special_node_count;
+    }
+
+    fn lower_bound(&self) -> i64 {
+        self.fixed
+    }
+
+    fn estimate(&self) -> i64 {
+        // TODO: worksを開示したら更新する
+        self.fixed + self.special_node_count * SPECIAL_COST_SUM / 2
     }
 }
