@@ -51,8 +51,10 @@ impl DurationCalculator {
     ) -> Duration {
         let mut ret = Duration::new(0, 0);
 
-        // core=0から移るswitch costを考慮する
-        ret.fixed += batch_size as i64 * input.cost_switch;
+        // core=0から移るswitch cost
+        if from_path_index == 0 {
+            ret.fixed += batch_size as i64 * input.cost_switch;
+        }
 
         for node_id in &graph.paths[packet_type].path[from_path_index..] {
             let max_batch_size = graph.nodes[*node_id].costs.len() - 1;

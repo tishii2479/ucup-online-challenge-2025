@@ -1,22 +1,25 @@
 ## タスクの挿入
-1. `packet_type`ごとに`s=min_batch_size`のバッチを作成する
-    - 処理
-        - time_limitが近い順にpacketを選ぶ
-        - そもそも間に合わないものは選択しない
-2. コアごとに挿入できるタスクの総所要時間を計算する
-    - `idle_task`があるなら挿入しない
-        - TODO: `idle_task`についても調ベて、`min`をとる
-    - `complete_t := cur_taskを完了するt`
-    - `afford_duration := min_time_limit[cur_task] - complete_t`
-    - TODO: タスクを他のコアに移動できるなら1回まで移動して、余裕を計算する
-    - TODO: タスクをどこで分割すれば挿入できるか調べる
-3. `timeout`する個数が多い順に`packet_type`、`afford_duration`が小さい順に挿入を試す
-    - 条件
-        - `new_task_duration < afford_duration`
-        - `next_t[target_core] + new_task_duration > min_time_limit[new_task]`
-    - TODO: 下限を`min_batch_size`違反量の増分を調べる
-        - 違反量が減るなら挿入する
-4. 挿入する
+1. packet_typeごとに`(cur_task.s / 2).min(n_packet_type)`のバッチを作る
+    - time_limitが近い順にpacketを選ぶ
+    - そもそも間に合わないものは選択しない
+    - そのままだとtimeoutするパケットがなければ挿入しなくて良い
+2. packet_typeごとに挿入した後で、元のバッチを進めて、d_timeoutとdtを求める
+    ```rust
+    let mut t = 0;
+    for split_index in path_index..=path.len() {
+        let mut t = cur_t + insert_packet_duration;
+        t += duration(cur_task to split_index)
+        let (task1, task2) = split_task(cur_task);
+        let task1_end_t = t + duration(task1);
+        let task2_end_t = task1_end_t + duration(task2);
+
+        let dt = task2_end_t - cur_t;
+        let d_timeout = calc_timeout(task1, task1_end_t) + calc_timeout(task2, task2_end_t);
+    }
+    ```
+3. `(d_timeout, dt)`でコアごとにソートする
+4. 各コアについて1つを上限で、`d_timeout < 0`を採用する
+5. 挿入する
     - `idle_tasks[core].push(cur_tasks[core_id])`
     - `cur_tasks[core_id] = insert task`
     - `q.push((cur_task.next_t.max(insert_task.next_t), ConsumeCore))`

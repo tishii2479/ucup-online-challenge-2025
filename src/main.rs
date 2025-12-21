@@ -12,6 +12,8 @@ const TRACK: bool = true;
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
+const ALPHA: f64 = 0.8;
+const INIT_WEIGHT: f64 = 50.;
 
 fn main() {
     let io = StdIO::new(false);
@@ -56,6 +58,7 @@ pub struct State {
     idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
     received_packets: IndexSet,
+    duration_estimator: DurationEstimator,
 }
 
 impl State {
@@ -67,6 +70,7 @@ impl State {
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
+            duration_estimator: DurationEstimator::new(n, ALPHA, INIT_WEIGHT),
         }
     }
 
@@ -239,6 +243,9 @@ fn process_task(
                 }
             }
             state.packet_special_cost[p.id] = Some(cost_sum);
+            state
+                .duration_estimator
+                .update_alpha(cur_task.packet_type, cost_sum);
         }
 
         // TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
@@ -400,7 +407,12 @@ fn complete_task(
 
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
         other_cores.sort_by_key(|&id| {
-            Reverse(cur_t + estimate_core_duration(state, id, input, graph).estimate())
+            let duration = estimate_core_duration(state, id, input, graph);
+            let duration = state.duration_estimator.estimate(
+                &duration,
+                state.next_tasks[id].as_ref().unwrap().packet_type,
+            );
+            Reverse(cur_t + duration)
         });
 
         for other_core_id in other_cores {
@@ -591,8 +603,17 @@ fn create_tasks(
     fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
         (received_t + cost_r).max(cur_t)
     }
-    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
+    fn is_timeouted(
+        packet: &Packet,
+        cur_t: i64,
+        cost_r: i64,
+        min_duration: &Duration,
+        state: &State,
+    ) -> bool {
+        let duration = state
+            .duration_estimator
+            .estimate(min_duration, packet.packet_type);
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration
     }
 
     let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
@@ -605,7 +626,10 @@ fn create_tasks(
 
         let batch_duration = calculator.get_path_duration(packet_type, cur_ids.len(), 0);
         let next_t = next_t(max_received_t, cur_t, input.cost_r);
-        let afford = min_time_limit - (next_t + batch_duration.estimate());
+        let duration = state
+            .duration_estimator
+            .estimate(&batch_duration, packet_type);
+        let afford = min_time_limit - (next_t + duration);
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
@@ -613,7 +637,7 @@ fn create_tasks(
         let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
         // パケットを締め切り順にソートする
         packets[packet_type].sort_by_key(|&packet| {
-            if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
+            if is_timeouted(&packet, cur_t, input.cost_r, &min_duration, state) {
                 // そもそも間に合わないパケットは優先度を一番下げる
                 INF
             } else {
@@ -630,16 +654,19 @@ fn create_tasks(
         for &packet in &packets[packet_type] {
             let new_duration =
                 calculator.get_path_duration(packet.packet_type, cur_ids.len() + 1, 0);
-            let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &min_duration);
+            let is_timeouted_packet =
+                is_timeouted(&packet, cur_t, input.cost_r, &min_duration, state);
+            let duration = state
+                .duration_estimator
+                .estimate(&new_duration, packet.packet_type);
             let changed_to_timeout_batch = if is_timeouted_packet {
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
                 let next_t = next_t(max_received_t, cur_t, input.cost_r);
-                min_time_limit < next_t + new_duration.estimate() && cur_ids.len() >= 1
+                min_time_limit < next_t + duration && cur_ids.len() >= 1
             } else {
                 let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
-                min_time_limit.min(packet.time_limit) < next_t + new_duration.estimate()
-                    && cur_ids.len() >= 1
+                min_time_limit.min(packet.time_limit) < next_t + duration && cur_ids.len() >= 1
             };
 
             if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE[packet_type] {
@@ -687,11 +714,33 @@ fn create_tasks(
         .collect()
 }
 
-impl Duration {
-    fn estimate(&self) -> i64 {
-        // TODO: worksを開示したら更新する
-        let alpha = 0.8;
-        (self.lower_bound() as f64 + alpha * (self.upper_bound() - self.lower_bound()) as f64)
+#[derive(Clone, Debug)]
+struct DurationEstimator {
+    special_costs: Vec<Vec<i64>>,
+    cur_alpha: Vec<f64>,
+    init_weight: f64,
+}
+
+impl DurationEstimator {
+    fn new(n: usize, init_alpha: f64, init_weight: f64) -> Self {
+        DurationEstimator {
+            special_costs: vec![Vec::with_capacity(n); N_PACKET_TYPE],
+            cur_alpha: vec![init_alpha; N_PACKET_TYPE],
+            init_weight,
+        }
+    }
+
+    fn update_alpha(&mut self, packet_type: usize, cost: i64) {
+        let alpha = cost as f64 / SPECIAL_COST_SUM as f64;
+        let w = self.init_weight + self.special_costs[packet_type].len() as f64;
+        self.cur_alpha[packet_type] = (self.cur_alpha[packet_type] as f64 * w + alpha) / (w + 1.0);
+        self.special_costs[packet_type].push(cost);
+    }
+
+    fn estimate(&self, duration: &Duration, packet_type: usize) -> i64 {
+        (duration.lower_bound() as f64
+            + self.cur_alpha[packet_type]
+                * (duration.upper_bound() - duration.lower_bound()) as f64)
             .round() as i64
     }
 }

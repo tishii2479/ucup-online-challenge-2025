@@ -112,7 +112,7 @@ def main() -> None:
     df = pd.concat([df, new_df], ignore_index=True)
     df["total"] = df.iloc[:, 2:].sum(axis=1)
 
-    print(df)
+    print(df.set_index("tag"))
 
 
 if __name__ == "__main__":
