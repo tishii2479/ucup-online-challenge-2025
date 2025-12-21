@@ -9,6 +9,7 @@ pub const N_NODE: usize = 20;
 pub const N_SPECIAL: usize = 8;
 pub const SPECIAL_NODE_ID: usize = 8 - 1; // 0-indexed
 pub const LAST_PACKET_T: i64 = 5_000_000;
+pub const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
 
 #[derive(Debug, Clone)]
 pub struct PacketPath {
@@ -83,6 +84,34 @@ pub struct TaskLog {
     pub batch_size: usize,
     pub packet_type: usize,
     pub path_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Duration {
+    pub fixed: i64,
+    pub special_node_count: i64,
+}
+
+impl Duration {
+    pub fn new(fixed: i64, special_node_count: i64) -> Self {
+        Self {
+            fixed,
+            special_node_count,
+        }
+    }
+
+    pub fn add(&mut self, other: &Duration) {
+        self.fixed += other.fixed;
+        self.special_node_count += other.special_node_count;
+    }
+
+    pub fn lower_bound(&self) -> i64 {
+        self.fixed
+    }
+
+    pub fn upper_bound(&self) -> i64 {
+        self.fixed + self.special_node_count * SPECIAL_COST_SUM
+    }
 }
 
 pub trait IO {
