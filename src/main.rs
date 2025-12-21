@@ -8,7 +8,6 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
-const INSERT_BATCH_SIZE: usize = 4;
 const MAX_BATCH_SIZE: usize = 16;
 
 fn main() {
@@ -458,174 +457,6 @@ fn estimate_core_duration(state: &State, core_id: usize, input: &Input, graph: &
     ret
 }
 
-/// 割り込み用のタスクを挿入する
-fn insert_interrupt_tasks(
-    cur_t: i64,
-    state: &mut State,
-    input: &Input,
-    graph: &Graph,
-    q: &mut EventQueue,
-) {
-    // 1. コアに挿入できるタスクの最大時間を計算する
-    let mut afford_durations = Vec::with_capacity(input.n_cores);
-    for core_id in 0..input.n_cores {
-        if !state.idle_tasks[core_id].is_empty() {
-            continue;
-        }
-        let complete_t = cur_t + estimate_core_duration(state, core_id, input, graph).upper_bound();
-        let Some(cur_task) = state.cur_tasks[core_id].as_ref() else {
-            continue;
-        };
-        let min_time_limit = cur_task
-            .packets
-            .iter()
-            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
-            .min()
-            .unwrap();
-        let afford_duration = min_time_limit - complete_t;
-        afford_durations.push((afford_duration, core_id));
-    }
-    afford_durations.sort_by_key(|&(duration, _)| duration);
-
-    // 2. packet_typeごとにs=INSERT_BATCH_SIZEのタスクを作成する
-    let min_task_start_t = (0..input.n_cores)
-        .map(|core_id| cur_t + estimate_core_duration(state, core_id, input, graph).upper_bound())
-        .min()
-        .unwrap();
-    let mut packets = vec![vec![]; N_PACKET_TYPE];
-    for await_packet in state.await_packets.iter() {
-        let packet = state.packets[*await_packet].as_ref().unwrap();
-        // 1. min_task_start_tから処理を開始したらtimeoutするパケット
-        let duration_b1 = estimate_path_duration(packet.packet_type, 1, input, graph);
-        let next_t = (packet.received_t + input.cost_r).max(min_task_start_t);
-        if next_t + duration_b1.upper_bound() <= packet.time_limit {
-            continue;
-        }
-
-        // 2. next_tから開始したら間に合うパケット
-        let duration_b =
-            estimate_path_duration(packet.packet_type, INSERT_BATCH_SIZE, input, graph);
-        let next_t = (packet.received_t + input.cost_r).max(cur_t);
-        if next_t + duration_b.lower_bound() > packet.time_limit {
-            continue;
-        }
-
-        packets[packet.packet_type].push(packet);
-    }
-
-    let mut batch_cands = vec![];
-    for packet_type in 0..N_PACKET_TYPE {
-        if packets[packet_type].len() < INSERT_BATCH_SIZE {
-            continue;
-        }
-
-        let duration_b = estimate_path_duration(packet_type, INSERT_BATCH_SIZE, input, graph);
-        packets[packet_type].sort_by_key(|p| p.time_limit);
-
-        let mut batch_ids = vec![];
-        let mut timeout_count = 0;
-        let mut min_time_limit = INF;
-        for &p in packets[packet_type].iter().take(INSERT_BATCH_SIZE) {
-            let next_t = (p.received_t + input.cost_r).max(min_task_start_t);
-            let is_timeout = next_t + duration_b.upper_bound() > p.time_limit;
-            if is_timeout {
-                timeout_count += 1;
-            }
-            min_time_limit = min_time_limit.min(p.time_limit);
-            batch_ids.push(p.i);
-        }
-        if timeout_count == 0 {
-            eprintln!(
-                "[{:8}] Skip insert interrupt task: packet_type={}, all packets can be processed before timeout",
-                cur_t, packet_type
-            );
-            eprintln!("batch-ids={:?}", batch_ids);
-            continue;
-        }
-
-        batch_cands.push((packet_type, batch_ids, timeout_count, min_time_limit));
-    }
-
-    // 3. timeoutする個数が多い順に、afford_durationが小さい順に挿入を試す
-    batch_cands.sort_by_key(|&(_, _, timeout_count, min_time_limit)| {
-        (Reverse(timeout_count), min_time_limit)
-    });
-
-    for (packet_type, batch_ids, _, min_time_limit) in batch_cands {
-        eprintln!("t={:8}", cur_t);
-        eprintln!(
-            "Attempt insert interrupt task: packet_type={}, batch_ids={:?}",
-            packet_type, batch_ids
-        );
-
-        let duration_b = estimate_path_duration(packet_type, INSERT_BATCH_SIZE, input, graph);
-        for &(max_duration, core_id) in &afford_durations {
-            if state.idle_tasks[core_id].len() > 0 {
-                continue;
-            }
-
-            let core_resume_t = state.cur_tasks[core_id].as_ref().unwrap().next_t;
-            let max_received_t = batch_ids
-                .iter()
-                .map(|&id| state.packets[id].as_ref().unwrap().received_t)
-                .max()
-                .unwrap();
-            let next_t = (max_received_t + input.cost_r).max(core_resume_t);
-            if duration_b.upper_bound() > max_duration {
-                eprintln!(
-                    "  Skip core_id={}: not enough afford_duration (afford={}, need={})",
-                    core_id,
-                    max_duration,
-                    duration_b.upper_bound()
-                );
-                continue;
-            }
-            if next_t + duration_b.upper_bound() > min_time_limit {
-                eprintln!(
-                    "  Skip core_id={}: cannot meet time limit (tl={}, end={})",
-                    core_id,
-                    min_time_limit,
-                    next_t + duration_b.upper_bound()
-                );
-                continue;
-            }
-
-            let task = Task {
-                next_t,
-                packet_type,
-                path_index: 0,
-                is_chunked: false,
-                packets: batch_ids
-                    .iter()
-                    .map(|&id| PacketStatus {
-                        id,
-                        is_advanced: false,
-                        is_switching_core: true,
-                    })
-                    .collect(),
-            };
-
-            eprintln!(
-                "Insert interrupt task: core_id={}, packet_type={}, batch_ids={:?}",
-                core_id, packet_type, batch_ids
-            );
-
-            // 挿入する
-            // await_packetsから削除する
-            for &p in &task.packets {
-                state.await_packets.remove(p.id);
-            }
-            let cur_task = state.cur_tasks[core_id].take().unwrap();
-
-            state.idle_tasks[core_id].push(cur_task);
-            state.cur_tasks[core_id] = Some(task);
-            q.push((Reverse(next_t), Event::ResumeCore(core_id)));
-
-            break;
-        }
-    }
-}
-
 /// パケット受信イベントの処理
 fn receive_packet(
     state: &mut State,
@@ -661,8 +492,7 @@ fn receive_packet(
         }
     }
 
-    // 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
-    insert_interrupt_tasks(cur_t, state, input, graph, q);
+    // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
 
     // 次のパケット受信イベントを登録する
     let next_t = cur_t + input.cost_r * 10; // TODO: 調整
@@ -761,8 +591,6 @@ fn estimate_path_duration(
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
-    const INF: i64 = 1_000_000_000_000;
-
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
