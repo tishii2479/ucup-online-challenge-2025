@@ -291,6 +291,8 @@ fn process_task(
             p.is_switching_core = false;
         }
 
+        cur_task.last_chunk_min_i = Some(min_i);
+
         process_packets(
             cur_task,
             t,
@@ -309,7 +311,6 @@ fn process_task(
         let all_chunk_finished = cur_task.packets.iter().all(|p| p.is_advanced);
         if all_chunk_finished {
             cur_task.path_index += 1;
-            cur_task.last_chunk_min_i = Some(min_i);
             cur_task.is_chunked = false;
             for p in cur_task.packets.iter_mut() {
                 p.is_advanced = false;
@@ -451,6 +452,29 @@ fn complete_task(
 /// タスクを分割する
 /// 割り当てられたパケットが全て処理中でなければ、next_tを現時刻に設定する
 fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
+    fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>, next_t: i64) -> Task {
+        let has_non_advanced = packets.iter().any(|p| !p.is_advanced);
+        let has_advanced = packets.iter().any(|p| p.is_advanced);
+        let all_advanced = !has_non_advanced;
+        let is_chunked = has_advanced && has_non_advanced;
+        let path_index = if original.is_chunked && all_advanced {
+            for p in packets.iter_mut() {
+                p.is_advanced = false;
+            }
+            original.path_index + 1
+        } else {
+            original.path_index
+        };
+        Task {
+            next_t,
+            packet_type: original.packet_type,
+            path_index,
+            is_chunked,
+            packets,
+            last_chunk_min_i: None,
+        }
+    }
+
     if task.packets.len() < 2 {
         return None;
     }
@@ -460,6 +484,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
     let mut packets1 = Vec::with_capacity(mid + 1);
     let mut packets2 = Vec::with_capacity(mid + 1);
 
+    // バッチ内で、すでに処理が完了しているパケット
     if let Some(min_i) = task.last_chunk_min_i {
         for i in 0..min_i {
             if packets2.len() >= mid {
@@ -469,6 +494,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
             used[i] = true;
         }
     }
+    // チャンクされているバッチ内で、まだ処理されていないパケット
     if task.is_chunked && packets2.len() < mid {
         used.fill(false);
         packets2.clear();
@@ -505,27 +531,6 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
     let task2 = build_task_from_split(task, packets2, next_t2);
 
     Some((task1, task2))
-}
-
-fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>, next_t: i64) -> Task {
-    let is_chunked =
-        packets.iter().any(|p| !p.is_advanced) && packets.iter().any(|p| p.is_advanced);
-    let path_index = if original.is_chunked && packets.iter().all(|p| p.is_advanced) {
-        for p in packets.iter_mut() {
-            p.is_advanced = false;
-        }
-        original.path_index + 1
-    } else {
-        original.path_index
-    };
-    Task {
-        next_t,
-        packet_type: original.packet_type,
-        path_index,
-        is_chunked,
-        packets,
-        last_chunk_min_i: None,
-    }
 }
 
 /// パケット受信イベントの処理
