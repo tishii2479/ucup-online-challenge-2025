@@ -551,6 +551,7 @@ fn receive_packet(
         // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
     }
 
+    // 全てのパケットを受信していれば次の受信イベントは登録しない
     if state.is_received_all() {
         return;
     }
