@@ -7,12 +7,13 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, interactor::*, libb::*};
 
-const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
+const INF: i64 = 1_000_000_000_000;
+
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
-const ALPHA: f64 = 0.8;
+const INIT_ALPHA: f64 = 0.8;
 const INIT_WEIGHT: f64 = 50.;
 
 fn main() {
@@ -70,7 +71,7 @@ impl State {
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
-            duration_estimator: DurationEstimator::new(n, ALPHA, INIT_WEIGHT),
+            duration_estimator: DurationEstimator::new(n, INIT_ALPHA, INIT_WEIGHT),
         }
     }
 
