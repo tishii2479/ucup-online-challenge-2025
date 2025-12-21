@@ -256,7 +256,7 @@ fn process_task(
     // node_id = [7,11,13,15,18]は分割して処理する
     // - TODO: node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
-    let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
+    let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         // 分割して処理する
         1
     } else {

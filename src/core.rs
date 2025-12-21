@@ -10,6 +10,7 @@ pub const N_SPECIAL: usize = 8;
 pub const SPECIAL_NODE_ID: usize = 8 - 1; // 0-indexed
 pub const LAST_PACKET_T: i64 = 5_000_000;
 pub const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
+pub const CHUNK_NODES: [usize; 4] = [11, 13, 15, 18];
 
 #[derive(Debug, Clone)]
 pub struct PacketPath {
