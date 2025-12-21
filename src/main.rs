@@ -262,8 +262,8 @@ fn process_task(
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         // 分割して処理する
         1
-    } else if node_id == SPECIAL_NODE_ID {
-        8
+    } else if node_id == SPECIAL_NODE_ID && state.received_packets.size() == state.packets.len() {
+        B / 2
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -476,8 +476,6 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
             used[i] = true;
         }
     } else {
-        // ChunkStatus::Advancedを優先的にpackets2に割り当てる
-        // TODO: NotAdvancedだけの場合も追加する
         for i in 0..task.packets.len() {
             if packets2.len() >= mid {
                 break;
@@ -503,21 +501,17 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
         }
     }
 
-    let task2_can_process_immediately = packets2.len() >= mid;
+    let task2_ready = packets2.len() >= mid;
 
     let next_t1 = task.next_t;
-    let next_t2 = if task2_can_process_immediately {
-        cur_t
-    } else {
-        task.next_t
-    };
+    let next_t2 = if task2_ready { cur_t } else { task.next_t };
 
     // 残りを追加する
     for i in 0..task.packets.len() {
         if used[i] {
             continue;
         }
-        if packets1.len() < mid || task2_can_process_immediately {
+        if packets1.len() < mid || task2_ready {
             packets1.push(task.packets[i]);
         } else {
             packets2.push(task.packets[i]);
