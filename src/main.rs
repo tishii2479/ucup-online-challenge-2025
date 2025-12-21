@@ -294,7 +294,7 @@ fn process_task(
 fn complete_task(
     state: &mut State,
     core_id: usize,
-    t: i64,
+    cur_t: i64,
     input: &Input,
     graph: &Graph,
     q: &mut EventQueue,
@@ -302,7 +302,7 @@ fn complete_task(
     // 遅延したパケット
     for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
         let packet = state.packets[p.id].as_ref().unwrap();
-        if t > packet.time_limit {
+        if cur_t > packet.time_limit {
             let d = estimate_path_duration(packet.packet_type, 1, input, graph);
             eprintln!(
                 "timeout: id={:5} arr={:8}, to={:4} (lb={:4}, ub={:4}), tl={:8}, end={:8}",
@@ -312,7 +312,7 @@ fn complete_task(
                 d.lower_bound(),
                 d.upper_bound(),
                 packet.time_limit,
-                t
+                cur_t
             );
         }
     }
@@ -322,13 +322,13 @@ fn complete_task(
 
     // idle_tasksからタスクを取得する
     if let Some(task) = state.idle_tasks[core_id].pop() {
-        q.push((Reverse(t), Event::ResumeCore(core_id)));
+        q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
         state.next_tasks[core_id] = Some(task);
         return;
     }
 
     // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
-    let mut tasks = create_tasks(&state, t, input, &graph);
+    let mut tasks = create_tasks(&state, cur_t, input, &graph);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -358,7 +358,10 @@ fn complete_task(
             .filter(|&id| state.next_tasks[id].is_some())
             .collect::<Vec<usize>>();
 
-        other_cores.sort_by_key(|&id| state.next_tasks[id].as_ref().unwrap().next_t);
+        // コアごとに保持している処理が終了するまでの時間が長い順に試す
+        other_cores.sort_by_key(|&id| {
+            Reverse(cur_t + estimate_core_duration(state, id, input, graph).estimate())
+        });
 
         for other_core_id in other_cores {
             let Some(task) = &state.next_tasks[other_core_id] else {
