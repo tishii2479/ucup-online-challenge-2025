@@ -529,25 +529,27 @@ fn receive_packet(
         state.received_packets.add(i);
     }
 
-    // packet_typeごとにタスクを作成して、優先度を計算する
-    let mut tasks = create_tasks(&state, cur_t, input, &graph);
+    if received_packet {
+        // packet_typeごとにタスクを作成して、優先度を計算する
+        let mut tasks = create_tasks(&state, cur_t, input, &graph);
 
-    // 空いているコアがある限り優先度順にタスクを割り当てる
-    for core_id in 0..input.n_cores {
-        if state.next_tasks[core_id].is_some() {
-            continue;
-        }
-        if let Some(task) = tasks.pop() {
-            // await_packetsから削除する
-            for &p in &task.packets {
-                state.await_packets.remove(p.id);
+        // 空いているコアがある限り優先度順にタスクを割り当てる
+        for core_id in 0..input.n_cores {
+            if state.next_tasks[core_id].is_some() {
+                continue;
             }
-            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-            state.next_tasks[core_id] = Some(task);
+            if let Some(task) = tasks.pop() {
+                // await_packetsから削除する
+                for &p in &task.packets {
+                    state.await_packets.remove(p.id);
+                }
+                q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+                state.next_tasks[core_id] = Some(task);
+            }
         }
-    }
 
-    // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
+        // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
+    }
 
     if state.is_received_all() {
         return;
@@ -557,9 +559,9 @@ fn receive_packet(
     let dt = if received_packet {
         input.cost_r
     } else if state.received_packets.size() > 0 {
-        input.cost_r * 3
+        input.cost_r * 2
     } else {
-        input.cost_r * 10
+        input.cost_r * 5
     };
     let next_t = cur_t + dt;
     if next_t <= LAST_PACKET_T {

@@ -18,7 +18,7 @@ want
 - タスクが長い場合に、少し待ってから分割してから並列処理した方が良い場合があるかも
 
 ## LAST
-- 一度packetが読まれたら細かく読み込むようにする、終わったら読み込みをやめる
+- receive_packetのdtの調整
 - パラメータのチューニング
     - `max_batch_size`: `n_cores, n, packet_type` ごとに良いバッチサイズがあるはず
 - TRACK=false
