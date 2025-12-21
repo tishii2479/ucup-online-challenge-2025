@@ -22,11 +22,16 @@ def gen(seed: int, n: int, n_cores: int, arrive_term: int) -> None:
 
     for _ in range(SUBTASK):
         print(n)
+        data = []
         for i in range(n):
             arrive = ARRIVE_START + rnd.randrange(0, arrive_term)
             packet_type = rnd.randrange(0, N_PACKET_TYPE) + 1
             timeout = rnd.randint(TIMEOUT_MIN, TIMEOUT_MAX)
             works = rnd.randrange(0, 1 << N_SPECIAL)
+            data.append((arrive, packet_type, timeout, works))
+        data.sort()
+
+        for i, (arrive, packet_type, timeout, works) in enumerate(data):
             print(i, arrive, packet_type, timeout, works)
 
 
