@@ -556,6 +556,8 @@ fn receive_packet(
     // 次のパケット受信イベントを登録する
     let dt = if received_packet {
         input.cost_r
+    } else if state.received_packets.size() > 0 {
+        input.cost_r * 3
     } else {
         input.cost_r * 10
     };
