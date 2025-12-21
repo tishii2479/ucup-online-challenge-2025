@@ -222,15 +222,27 @@ fn process_task(
     }
 
     let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
+
     let max_batch_size = graph.nodes[node_id].costs.len() - 1;
-    let is_chunk = cur_task.packets.len() > max_batch_size || cur_task.is_chunked;
+
+    // node_id = [7,11,13,15,18]は分割して処理する
+    // - node_id = 7 -> 小さく分けて処理する
+    // - node_id = 11 -> 1つずつ処理する
+    let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
+        // 分割して処理する
+        1
+    } else {
+        max_batch_size
+    };
+
+    let is_chunk = cur_task.packets.len() > desired_batch_size || cur_task.is_chunked;
 
     if is_chunk {
         cur_task.is_chunked = true;
 
-        let mut chunk_packets = Vec::with_capacity(max_batch_size);
+        let mut chunk_packets = Vec::with_capacity(desired_batch_size);
         for p in cur_task.packets.iter_mut() {
-            if chunk_packets.len() >= max_batch_size {
+            if chunk_packets.len() >= desired_batch_size {
                 break;
             }
             if p.is_advanced {
