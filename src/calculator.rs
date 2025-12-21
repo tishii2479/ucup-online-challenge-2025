@@ -164,3 +164,34 @@ pub fn estimate_task_duration(
 
     ret
 }
+
+#[derive(Clone, Debug)]
+pub struct DurationEstimator {
+    special_costs: Vec<Vec<i64>>,
+    cur_alpha: Vec<f64>,
+    init_weight: f64,
+}
+
+impl DurationEstimator {
+    pub fn new(n: usize, init_alpha: f64, init_weight: f64) -> Self {
+        DurationEstimator {
+            special_costs: vec![Vec::with_capacity(n); N_PACKET_TYPE],
+            cur_alpha: vec![init_alpha; N_PACKET_TYPE],
+            init_weight,
+        }
+    }
+
+    pub fn update_alpha(&mut self, packet_type: usize, cost: i64) {
+        let alpha = cost as f64 / SPECIAL_COST_SUM as f64;
+        let w = self.init_weight + self.special_costs[packet_type].len() as f64;
+        self.cur_alpha[packet_type] = (self.cur_alpha[packet_type] as f64 * w + alpha) / (w + 1.0);
+        self.special_costs[packet_type].push(cost);
+    }
+
+    pub fn estimate(&self, duration: &Duration, packet_type: usize) -> i64 {
+        (duration.lower_bound() as f64
+            + self.cur_alpha[packet_type]
+                * (duration.upper_bound() - duration.lower_bound()) as f64)
+            .round() as i64
+    }
+}
