@@ -8,7 +8,8 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
-const MAX_BATCH_SIZE: usize = 32;
+const MAX_BATCH_SIZE: usize = 16;
+const MIN_BATCH_SIZE: usize = 4;
 
 fn main() {
     let io = StdIO::new(false);
@@ -559,8 +560,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
     fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
         (received_t + cost_r).max(cur_t)
     }
-    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, duration_b1: &Duration) -> bool {
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration_b1.estimate()
+    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
     }
 
     let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
@@ -577,17 +578,11 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
-    let max_batch_size = if state.await_packets.size() < state.packets.len() / 2 {
-        MAX_BATCH_SIZE / 2
-    } else {
-        MAX_BATCH_SIZE
-    };
-
     for packet_type in 0..N_PACKET_TYPE {
-        let duration_b1 = estimate_path_duration(packet_type, 1, input, graph);
+        let min_duration = estimate_path_duration(packet_type, MIN_BATCH_SIZE, input, graph);
         // パケットを締め切り順にソートする
         packets[packet_type].sort_by_key(|&packet| {
-            if is_timeouted(&packet, cur_t, input.cost_r, &duration_b1) {
+            if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
                 // そもそも間に合わないパケットは優先度を一番下げる
                 INF
             } else {
@@ -604,7 +599,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         for &packet in &packets[packet_type] {
             let new_duration =
                 estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
-            let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &duration_b1);
+            let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &min_duration);
             let changed_to_timeout_batch = if is_timeouted_packet {
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
@@ -616,7 +611,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                     && cur_ids.len() >= 1
             };
 
-            if changed_to_timeout_batch || cur_ids.len() >= max_batch_size {
+            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
@@ -695,6 +690,7 @@ fn estimate_path_duration(
             ret.special_node_count += batch_size as i64;
         }
     }
+
     ret
 }
 

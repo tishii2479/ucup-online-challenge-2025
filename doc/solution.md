@@ -1,14 +1,15 @@
 ## タスクの挿入
-1. コアごとに挿入できるタスクの総所要時間を計算する
+1. `packet_type`ごとに`s=min_batch_size`のバッチを作成する
+    - 処理
+        - time_limitが近い順にpacketを選ぶ
+        - そもそも間に合わないものは選択しない
+2. コアごとに挿入できるタスクの総所要時間を計算する
     - `idle_task`があるなら挿入しない
         - TODO: `idle_task`についても調ベて、`min`をとる
     - `complete_t := cur_taskを完了するt`
     - `afford_duration := min_time_limit[cur_task] - complete_t`
     - TODO: タスクを他のコアに移動できるなら1回まで移動して、余裕を計算する
-2. `packet_type`ごとに`s=min_batch_size`のバッチを作成する
-    - 処理
-        - time_limitが近い順にpacketを選ぶ
-        - そもそも間に合わないものは選択しない
+    - TODO: タスクをどこで分割すれば挿入できるか調べる
 3. `timeout`する個数が多い順に`packet_type`、`afford_duration`が小さい順に挿入を試す
     - 条件
         - `new_task_duration < afford_duration`
@@ -84,6 +85,3 @@
 3. バッチ内のパケットがtimeoutしないように、バッチサイズを`batch_size_limit=32`まで大きくして、前から分割する
     - `afford = min(time_limit[packet_i]) - (next_t + path_duration[packet_type][s]) > 0`
 4. 全てをまとめて、バッチごとに`afford`が小さい順にソートする
-
-## TODO:
-- 分割するコアの選択基準の改善
