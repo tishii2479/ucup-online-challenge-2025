@@ -37,7 +37,7 @@ def main() -> None:
     df = pd.read_csv("doc/scores.csv")
 
     for case in CASES:
-        in_file = f"in/{str(case['seed']).zfill(4)}.txt"
+        in_file = f"{str(case['seed']).zfill(4)}.txt"
         print(
             f"\n--- Running case: n={case['n']}, n_cores={case['n_cores']}, "
             f"arrive_terms={case['arrive_terms']} ({in_file}) ---"
@@ -55,7 +55,7 @@ def main() -> None:
                 "--arrive-term",
                 str(case["arrive_terms"]),
             ],
-            stdout=open(in_file, "w"),
+            stdout=open(f"in/{in_file}", "w"),
         )
 
         result = subprocess.run(
@@ -63,7 +63,7 @@ def main() -> None:
                 "python3",
                 "problem/interactive_runner.py",
                 "./problem/interactor.o",
-                str(in_file),
+                f"in/{in_file}",
                 "out.txt",
                 "--",
                 "./sol",
@@ -100,11 +100,19 @@ def main() -> None:
         columns=df.columns,
     )
     df = pd.concat([df, new_df], ignore_index=True)
-    print(df)
 
     if args.tag != "current":
         print("Updating doc/scores.csv")
         df.to_csv("doc/scores.csv", index=False)
+
+    new_df = pd.DataFrame(
+        [["best", "-"] + df.iloc[:, 2:].max().tolist()],
+        columns=df.columns,
+    )
+    df = pd.concat([df, new_df], ignore_index=True)
+    df["total"] = df.iloc[:, 2:].sum(axis=1)
+
+    print(df)
 
 
 if __name__ == "__main__":

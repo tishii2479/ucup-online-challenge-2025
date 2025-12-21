@@ -52,6 +52,7 @@ pub struct State {
     /// 上に積まれているほど優先度が高い
     idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
+    received_packets: IndexSet,
 }
 
 impl State {
@@ -62,7 +63,12 @@ impl State {
             next_tasks: vec![None; input.n_cores],
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
+            received_packets: IndexSet::empty(n),
         }
+    }
+
+    fn is_received_all(&self) -> bool {
+        self.received_packets.size() == self.packets.len()
     }
 }
 
@@ -505,6 +511,7 @@ fn receive_packet(
         let i = packet.i;
         state.packets[i] = Some(packet);
         state.await_packets.add(i);
+        state.received_packets.add(i);
     }
 
     // packet_typeごとにタスクを作成して、優先度を計算する
@@ -526,6 +533,10 @@ fn receive_packet(
     }
 
     // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
+
+    if state.is_received_all() {
+        return;
+    }
 
     // 次のパケット受信イベントを登録する
     let next_t = cur_t + input.cost_r * 10; // TODO: 調整
@@ -566,6 +577,12 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
+    let max_batch_size = if state.await_packets.size() < state.packets.len() / 2 {
+        MAX_BATCH_SIZE / 2
+    } else {
+        MAX_BATCH_SIZE
+    };
+
     for packet_type in 0..N_PACKET_TYPE {
         let duration_b1 = estimate_path_duration(packet_type, 1, input, graph);
         // パケットを締め切り順にソートする
@@ -599,7 +616,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                     && cur_ids.len() >= 1
             };
 
-            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
+            if changed_to_timeout_batch || cur_ids.len() >= max_batch_size {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
