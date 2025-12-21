@@ -45,6 +45,7 @@ pub struct Task {
     packet_type: usize,
     path_index: usize,
     is_chunked: bool,
+    last_chunk_min_i: Option<usize>,
     packets: Vec<PacketStatus>,
 }
 
@@ -253,6 +254,8 @@ fn process_task(
         // TODO: insert task
     }
 
+    cur_task.last_chunk_min_i = None;
+
     // node_id = [7,11,13,15,18]は分割して処理する
     // - TODO: node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
@@ -268,7 +271,8 @@ fn process_task(
         cur_task.is_chunked = true;
 
         let mut chunk_packets = Vec::with_capacity(desired_batch_size);
-        for p in cur_task.packets.iter_mut() {
+        let mut min_i = cur_task.packets.len();
+        for (i, p) in cur_task.packets.iter_mut().enumerate() {
             // 処理中だったものを処理済みに変える
             if p.chunk_status == ChunkStatus::Processing {
                 p.chunk_status = ChunkStatus::Advanced;
@@ -280,7 +284,9 @@ fn process_task(
             if p.chunk_status == ChunkStatus::Advanced {
                 continue;
             }
+
             p.chunk_status = ChunkStatus::Processing;
+            min_i = min_i.min(i);
             chunk_packets.push(*p);
 
             // 一度処理をしたパケットはコアのswitchingを消す
@@ -308,7 +314,7 @@ fn process_task(
             .all(|p| p.chunk_status != ChunkStatus::NotAdvanced);
         if all_chunk_finished {
             cur_task.path_index += 1;
-
+            cur_task.last_chunk_min_i = Some(min_i);
             cur_task.is_chunked = false;
             for p in cur_task.packets.iter_mut() {
                 p.chunk_status = ChunkStatus::NotAdvanced;
@@ -429,6 +435,7 @@ fn complete_task(
             if task2.path_index == graph.paths[task2.packet_type].path.len() {
                 continue;
             }
+            dbg!(&task, &task1, &task2);
 
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
             state.next_tasks[other_core_id] = Some(task1);
@@ -459,15 +466,39 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
     let mut packets1 = Vec::with_capacity(mid + 1);
     let mut packets2 = Vec::with_capacity(mid + 1);
 
-    // 1. ChunkStatus::Advancedを優先的にpackets2に割り当てる
-    for i in 0..task.packets.len() {
-        if packets2.len() >= mid {
-            break;
-        }
-        if task.packets[i].chunk_status == ChunkStatus::Advanced {
+    if let Some(min_i) = task.last_chunk_min_i {
+        for i in 0..min_i {
+            if packets2.len() >= mid {
+                break;
+            }
             packets2.push(task.packets[i]);
             used[i] = true;
         }
+    } else {
+        // ChunkStatus::Advancedを優先的にpackets2に割り当てる
+        // TODO: NotAdvancedも
+        for i in 0..task.packets.len() {
+            if packets2.len() >= mid {
+                break;
+            }
+            if task.packets[i].chunk_status == ChunkStatus::Advanced {
+                packets2.push(task.packets[i]);
+                used[i] = true;
+            }
+        }
+
+        // if packets2.len() < mid {
+        //     packets2.clear();
+        //     for i in 0..task.packets.len() {
+        //         if packets2.len() >= mid {
+        //             break;
+        //         }
+        //         if task.packets[i].chunk_status == ChunkStatus::NotAdvanced {
+        //             packets2.push(task.packets[i]);
+        //             used[i] = true;
+        //         }
+        //     }
+        // }
     }
 
     let task2_can_process_immediately = packets2.len() >= mid;
@@ -479,12 +510,12 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
         task.next_t
     };
 
-    // 2. 残りを追加する
+    // 残りを追加する
     for i in 0..task.packets.len() {
         if used[i] {
             continue;
         }
-        if packets1.len() < mid {
+        if packets1.len() < mid || task2_can_process_immediately {
             packets1.push(task.packets[i]);
         } else {
             packets2.push(task.packets[i]);
@@ -522,6 +553,7 @@ fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>, next_t
         path_index,
         is_chunked,
         packets,
+        last_chunk_min_i: None,
     }
 }
 
@@ -710,6 +742,7 @@ fn create_tasks(
                         is_switching_core: true, // 最初はcore=0から必ずコアを移る
                     })
                     .collect(),
+                last_chunk_min_i: None,
             }
         })
         .collect()

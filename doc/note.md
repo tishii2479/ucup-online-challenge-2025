@@ -213,10 +213,24 @@ insertがうまくいかないのは、現状のタスクがtimeoutギリギリ�
 3. `(d_timeout, dt)`でコアごとにソートする
 4. 各コアについて1つを上限で、`d_timeout < 0`を採用する
 
-## annealing
-1. worksが全て判明するタイミングを調べる
+- worksが全て判明するタイミングを調べる
+    - 結構遅い
 
-12/21
+- NotAdvancedだけも集められる
+
+12/21 chunk
 12/22 insert
 12/23 -
 12/24 最終調整
+
+process:
+last-chunk: [l, r)
+chunked:
+    [0,l) -> advanced
+    [r,n) -> not-advanced
+not-hunked:
+    [0,l) -> advanced
+    [r,n) -> not-advanced
+
+chunkedは今まで通り
+last-chunkは処理した時に更新
