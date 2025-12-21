@@ -222,16 +222,14 @@ fn process_task(
         // TODO: insert task
     }
 
-    let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
-
     // node_id = [7,11,13,15,18]は分割して処理する
     // - node_id = 7 -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
     let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
         // 分割して処理する
         1
-    } else if node_id == SPECIAL_NODE_ID {
-        (cur_task.packets.len() / 2).max(4)
+    // } else if node_id == SPECIAL_NODE_ID {
+    //     (cur_task.packets.len() / 2).max(4)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -551,7 +549,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
         (received_t + cost_r).max(cur_t)
     }
     fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, duration_b1: &Duration) -> bool {
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration_b1.lower_bound()
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration_b1.estimate()
     }
 
     let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
@@ -649,7 +647,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 impl Duration {
     fn estimate(&self) -> i64 {
         // TODO: worksを開示したら更新する
-        let alpha = 0.9;
+        let alpha = 0.8;
         (self.lower_bound() as f64 + alpha * (self.upper_bound() - self.lower_bound()) as f64)
             .round() as i64
     }
