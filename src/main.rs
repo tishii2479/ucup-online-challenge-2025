@@ -9,7 +9,7 @@ use crate::{core::*, interactor::*, libb::*};
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
 const MAX_BATCH_SIZE: usize = 16;
-const MIN_BATCH_SIZE: usize = 4;
+const MIN_BATCH_SIZE: usize = 1;
 
 fn main() {
     let io = StdIO::new(false);
