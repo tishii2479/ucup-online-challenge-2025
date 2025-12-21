@@ -249,8 +249,8 @@ fn process_task(
     let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
         // 分割して処理する
         1
-    } else if node_id == SPECIAL_NODE_ID {
-        (cur_task.packets.len() / 4).max(4)
+    // } else if node_id == SPECIAL_NODE_ID {
+    //     (cur_task.packets.len() / 2).max(2)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
