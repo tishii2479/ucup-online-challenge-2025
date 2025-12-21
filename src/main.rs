@@ -46,8 +46,8 @@ struct Task {
 pub struct State {
     packets: Vec<Option<Packet>>,
     packet_special_cost: Vec<Option<i64>>,
-    /// cur_tasks[core_id] := core_idで次に実行するタスク
-    cur_tasks: Vec<Option<Task>>,
+    /// next_tasks[core_id] := core_idで次に実行するタスク
+    next_tasks: Vec<Option<Task>>,
     /// idle_tasks[core_id] := core_idで待機中のタスク
     /// 上に積まれているほど優先度が高い
     idle_tasks: Vec<Vec<Task>>,
@@ -59,7 +59,7 @@ impl State {
         Self {
             packets: vec![None; n],
             packet_special_cost: vec![None; n],
-            cur_tasks: vec![None; input.n_cores],
+            next_tasks: vec![None; input.n_cores],
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
         }
@@ -99,7 +99,7 @@ impl Solver for GreedySolver {
                 }
                 Event::ResumeCore(core_id) => {
                     // タスクが完了したか確認する
-                    if let Some(cur_task) = &state.cur_tasks[core_id] {
+                    if let Some(cur_task) = &state.next_tasks[core_id] {
                         if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
                             complete_task(&mut state, core_id, t.0, input, graph, &mut q);
                             continue;
@@ -197,7 +197,7 @@ fn process_task(
     q: &mut EventQueue,
     tracker: &mut Tracker,
 ) {
-    let cur_task = state.cur_tasks[core_id]
+    let cur_task = state.next_tasks[core_id]
         .as_mut()
         .expect("cur_task should be Some");
 
@@ -300,7 +300,7 @@ fn complete_task(
     q: &mut EventQueue,
 ) {
     // 遅延したパケット
-    for p in &state.cur_tasks[core_id].as_ref().unwrap().packets {
+    for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
         let packet = state.packets[p.id].as_ref().unwrap();
         if t > packet.time_limit {
             let d = estimate_path_duration(packet.packet_type, 1, input, graph);
@@ -318,12 +318,12 @@ fn complete_task(
     }
 
     // タスク完了
-    state.cur_tasks[core_id] = None;
+    state.next_tasks[core_id] = None;
 
     // idle_tasksからタスクを取得する
     if let Some(task) = state.idle_tasks[core_id].pop() {
         q.push((Reverse(t), Event::ResumeCore(core_id)));
-        state.cur_tasks[core_id] = Some(task);
+        state.next_tasks[core_id] = Some(task);
         return;
     }
 
@@ -335,7 +335,7 @@ fn complete_task(
             state.await_packets.remove(p.id);
         }
         q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-        state.cur_tasks[core_id] = Some(task);
+        state.next_tasks[core_id] = Some(task);
         return;
     }
 
@@ -348,20 +348,20 @@ fn complete_task(
             }
             if let Some(task) = state.idle_tasks[other_core_id].pop() {
                 q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-                state.cur_tasks[core_id] = Some(task);
+                state.next_tasks[core_id] = Some(task);
                 return;
             }
         }
 
         let mut other_cores = (0..input.n_cores)
             .filter(|&id| id != core_id)
-            .filter(|&id| state.cur_tasks[id].is_some())
+            .filter(|&id| state.next_tasks[id].is_some())
             .collect::<Vec<usize>>();
 
-        other_cores.sort_by_key(|&id| state.cur_tasks[id].as_ref().unwrap().next_t);
+        other_cores.sort_by_key(|&id| state.next_tasks[id].as_ref().unwrap().next_t);
 
         for other_core_id in other_cores {
-            let Some(task) = &state.cur_tasks[other_core_id] else {
+            let Some(task) = &state.next_tasks[other_core_id] else {
                 continue;
             };
 
@@ -375,7 +375,7 @@ fn complete_task(
             }
 
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
-            state.cur_tasks[other_core_id] = Some(task1);
+            state.next_tasks[other_core_id] = Some(task1);
 
             task2
                 .packets
@@ -383,7 +383,7 @@ fn complete_task(
                 .for_each(|p| p.is_switching_core = true);
 
             q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
-            state.cur_tasks[core_id] = Some(task2);
+            state.next_tasks[core_id] = Some(task2);
             break;
         }
     }
@@ -439,7 +439,7 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
 /// コアが現状保持しているの処理が終了するまでの時間を見積もる
 fn estimate_core_duration(state: &State, core_id: usize, input: &Input, graph: &Graph) -> Duration {
     let mut ret = Duration::new(0, 0);
-    if let Some(cur_task) = &state.cur_tasks[core_id] {
+    if let Some(cur_task) = &state.next_tasks[core_id] {
         ret.add(&estimate_task_duration(
             cur_task,
             input,
@@ -480,7 +480,7 @@ fn receive_packet(
 
     // 空いているコアがある限り優先度順にタスクを割り当てる
     for core_id in 0..input.n_cores {
-        if state.cur_tasks[core_id].is_some() {
+        if state.next_tasks[core_id].is_some() {
             continue;
         }
         if let Some(task) = tasks.pop() {
@@ -489,7 +489,7 @@ fn receive_packet(
                 state.await_packets.remove(p.id);
             }
             q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-            state.cur_tasks[core_id] = Some(task);
+            state.next_tasks[core_id] = Some(task);
         }
     }
 
