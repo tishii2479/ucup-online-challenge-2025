@@ -81,6 +81,7 @@ pub struct TaskLog {
     pub core_id: usize,
     pub start_t: i64,
     pub end_t: i64,
+    pub node_id: usize,
     pub batch_size: usize,
     pub packet_type: usize,
     pub path_index: usize,

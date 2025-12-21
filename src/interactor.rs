@@ -282,8 +282,8 @@ impl Tracker {
                 json.push(',');
             }
             json.push_str(&format!(
-            r#"{{"core_id":{},"start_t":{},"end_t":{},"batch_size":{},"packet_type":{},"path_index":{}}}"#,
-            log.core_id, log.start_t, log.end_t, log.batch_size, log.packet_type, log.path_index
+            r#"{{"core_id":{},"start_t":{},"end_t":{},"batch_size":{},"packet_type":{},"path_index":{},"node_id":{}}}"#,
+            log.core_id, log.start_t, log.end_t, log.batch_size, log.packet_type, log.path_index, log.node_id
         ));
         }
         json.push(']');

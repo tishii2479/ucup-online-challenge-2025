@@ -158,7 +158,9 @@ fn process_packets(
     };
     let switch_cost =
         packets.iter().filter(|p| p.is_switching_core).count() as i64 * input.cost_switch;
+
     cur_task.next_t = cur_t + dt + switch_cost;
+
     q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
     interactor.send_execute(cur_t, core_id, node_id, packets.len(), &packets);
@@ -177,6 +179,7 @@ fn process_packets(
         core_id,
         start_t: cur_t,
         end_t: cur_task.next_t,
+        node_id,
         batch_size: packets.len(),
         packet_type: cur_task.packet_type,
         path_index: cur_task.path_index,
@@ -296,7 +299,7 @@ fn complete_task(
     graph: &Graph,
     q: &mut EventQueue,
 ) {
-    // 遅延したパケットを調べる
+    // 遅延したパケット
     for p in &state.cur_tasks[core_id].as_ref().unwrap().packets {
         let packet = state.packets[p.id].as_ref().unwrap();
         if t > packet.time_limit {
@@ -350,34 +353,39 @@ fn complete_task(
             }
         }
 
-        let busiest_core_id = (0..input.n_cores)
+        let mut other_cores = (0..input.n_cores)
             .filter(|&id| id != core_id)
-            .max_by_key(|&id| estimate_core_duration(&state, id, input, graph).estimate())
-            .unwrap();
+            .filter(|&id| state.cur_tasks[id].is_some())
+            .collect::<Vec<usize>>();
 
-        // busiest_coreのcur_taskを半分に分ける
-        let Some(task) = &state.cur_tasks[busiest_core_id] else {
-            return;
-        };
+        other_cores.sort_by_key(|&id| state.cur_tasks[id].as_ref().unwrap().next_t);
 
-        let Some((task1, mut task2)) = split_task(task) else {
-            return;
-        };
+        for other_core_id in other_cores {
+            let Some(task) = &state.cur_tasks[other_core_id] else {
+                continue;
+            };
 
-        // task2が完了している場合は分割する必要がない
-        if task2.path_index == graph.paths[task2.packet_type].path.len() {
-            return;
+            let Some((task1, mut task2)) = split_task(task) else {
+                continue;
+            };
+
+            // task2が完了している場合は分割する必要がない
+            if task2.path_index == graph.paths[task2.packet_type].path.len() {
+                continue;
+            }
+
+            // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
+            state.cur_tasks[other_core_id] = Some(task1);
+
+            task2
+                .packets
+                .iter_mut()
+                .for_each(|p| p.is_switching_core = true);
+
+            q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
+            state.cur_tasks[core_id] = Some(task2);
+            break;
         }
-
-        // NOTE: busiest_core_idはすでにqに追加されているのでq.pushは不要
-        state.cur_tasks[busiest_core_id] = Some(task1);
-
-        task2
-            .packets
-            .iter_mut()
-            .for_each(|p| p.is_switching_core = true);
-        q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
-        state.cur_tasks[core_id] = Some(task2);
     }
 
     // NOTE: なければパケットが来るまで待機で良い
