@@ -262,6 +262,8 @@ fn process_task(
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         // 分割して処理する
         1
+    } else if node_id == SPECIAL_NODE_ID {
+        8
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -354,22 +356,22 @@ fn complete_task(
     q: &mut EventQueue,
 ) {
     // 遅延したパケット
-    for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
-        let packet = state.packets[p.id].as_ref().unwrap();
-        if cur_t > packet.time_limit {
-            let d = calculator.get_path_duration(packet.packet_type, 1, 0);
-            eprintln!(
-                "timeout: id={:5} arr={:8}, to={:4} (lb={:4}, ub={:4}), tl={:8}, end={:8}",
-                p.id,
-                packet.arrive,
-                packet.timeout,
-                d.lower_bound(),
-                d.upper_bound(),
-                packet.time_limit,
-                cur_t
-            );
-        }
-    }
+    // for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
+    //     let packet = state.packets[p.id].as_ref().unwrap();
+    //     if cur_t > packet.time_limit {
+    //         let d = calculator.get_path_duration(packet.packet_type, 1, 0);
+    //         eprintln!(
+    //             "timeout: id={:5} arr={:8}, to={:4} (lb={:4}, ub={:4}), tl={:8}, end={:8}",
+    //             p.id,
+    //             packet.arrive,
+    //             packet.timeout,
+    //             d.lower_bound(),
+    //             d.upper_bound(),
+    //             packet.time_limit,
+    //             cur_t
+    //         );
+    //     }
+    // }
 
     // タスク完了
     state.next_tasks[core_id] = None;
@@ -435,7 +437,6 @@ fn complete_task(
             if task2.path_index == graph.paths[task2.packet_type].path.len() {
                 continue;
             }
-            dbg!(&task, &task1, &task2);
 
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
             state.next_tasks[other_core_id] = Some(task1);
@@ -476,7 +477,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
         }
     } else {
         // ChunkStatus::Advancedを優先的にpackets2に割り当てる
-        // TODO: NotAdvancedも
+        // TODO: NotAdvancedだけの場合も追加する
         for i in 0..task.packets.len() {
             if packets2.len() >= mid {
                 break;
@@ -486,19 +487,20 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
                 used[i] = true;
             }
         }
+        if task.is_chunked && packets2.len() < mid {
+            used.fill(false);
+            packets2.clear();
 
-        // if packets2.len() < mid {
-        //     packets2.clear();
-        //     for i in 0..task.packets.len() {
-        //         if packets2.len() >= mid {
-        //             break;
-        //         }
-        //         if task.packets[i].chunk_status == ChunkStatus::NotAdvanced {
-        //             packets2.push(task.packets[i]);
-        //             used[i] = true;
-        //         }
-        //     }
-        // }
+            for i in 0..task.packets.len() {
+                if packets2.len() >= mid {
+                    break;
+                }
+                if task.packets[i].chunk_status == ChunkStatus::NotAdvanced {
+                    packets2.push(task.packets[i]);
+                    used[i] = true;
+                }
+            }
+        }
     }
 
     let task2_can_process_immediately = packets2.len() >= mid;
