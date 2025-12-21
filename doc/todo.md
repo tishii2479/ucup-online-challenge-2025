@@ -28,6 +28,4 @@ want
 - TRACK=false
 
 ## others.
-- max(score)なので、一つのケースに時間をかけて、他は適当にやる
 - 暫定テストケースを探る
-

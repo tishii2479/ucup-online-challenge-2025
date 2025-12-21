@@ -80,17 +80,6 @@ enum Event {
     ResumeCore(usize), // core_id
 }
 
-fn calc_timeout_score_rate(score: &Score) -> f64 {
-    let score1 = score.to_score();
-    let no_timeout_score = Score {
-        throughput: score.throughput,
-        timeout_rate: 0.0,
-    };
-    let score2 = no_timeout_score.to_score();
-    let score_rate = (score2 - score1) / score2;
-    score_rate
-}
-
 type EventQueue = BinaryHeap<(Reverse<i64>, Event)>;
 
 pub struct GreedySolver {
@@ -107,6 +96,8 @@ impl Solver for GreedySolver {
     fn solve<I: Interactor>(&self, n: usize, interactor: &mut I, input: &Input, graph: &Graph) {
         let mut tracker = Tracker::new(n, self.tracker_enabled);
 
+        let calculator = DurationCalculator::new(input, graph);
+
         let mut q: EventQueue = BinaryHeap::new();
         q.push((Reverse(1), Event::ReceivePacket));
 
@@ -114,13 +105,21 @@ impl Solver for GreedySolver {
         while let Some((t, event)) = q.pop() {
             match event {
                 Event::ReceivePacket => {
-                    receive_packet(&mut state, t.0, interactor, input, graph, &mut q);
+                    receive_packet(&mut state, t.0, interactor, input, &calculator, &mut q);
                 }
                 Event::ResumeCore(core_id) => {
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.next_tasks[core_id] {
                         if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
-                            complete_task(&mut state, core_id, t.0, input, graph, &mut q);
+                            complete_task(
+                                &mut state,
+                                core_id,
+                                t.0,
+                                input,
+                                graph,
+                                &calculator,
+                                &mut q,
+                            );
                             continue;
                         }
                     }
@@ -141,11 +140,12 @@ impl Solver for GreedySolver {
 
         interactor.send_finish();
 
-        let score = tracker.dump_score(n, &state.packets, graph, input);
-        let calc_score_rate = calc_timeout_score_rate(&score);
-        eprintln!("timeout score rate: {:.3}%", calc_score_rate * 100.0);
-
-        tracker.dump_task_logs();
+        if self.tracker_enabled {
+            let score = tracker.dump_score(n, &state.packets, graph, input);
+            let calc_score_rate = calc_timeout_score_rate(&score);
+            eprintln!("timeout score rate: {:.3}%", calc_score_rate * 100.0);
+            tracker.dump_task_logs();
+        }
     }
 }
 
@@ -335,13 +335,14 @@ fn complete_task(
     cur_t: i64,
     input: &Input,
     graph: &Graph,
+    calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
     // 遅延したパケット
     for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
         let packet = state.packets[p.id].as_ref().unwrap();
         if cur_t > packet.time_limit {
-            let d = estimate_path_duration(packet.packet_type, 1, input, graph);
+            let d = calculator.get_path_duration(packet.packet_type, 1, 0);
             eprintln!(
                 "timeout: id={:5} arr={:8}, to={:4} (lb={:4}, ub={:4}), tl={:8}, end={:8}",
                 p.id,
@@ -366,7 +367,7 @@ fn complete_task(
     }
 
     // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
-    let mut tasks = create_tasks(&state, cur_t, input, &graph);
+    let mut tasks = create_tasks(&state, cur_t, input, &calculator);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -516,7 +517,7 @@ fn receive_packet(
     cur_t: i64,
     interactor: &mut impl Interactor,
     input: &Input,
-    graph: &Graph,
+    calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
     // パケットを登録する
@@ -531,7 +532,7 @@ fn receive_packet(
 
     if received_packet {
         // packet_typeごとにタスクを作成して、優先度を計算する
-        let mut tasks = create_tasks(&state, cur_t, input, &graph);
+        let mut tasks = create_tasks(&state, cur_t, input, &calculator);
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -572,7 +573,12 @@ fn receive_packet(
 
 /// タスクを作成する
 /// 後ろほど優先度が高い
-fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<Task> {
+fn create_tasks(
+    state: &State,
+    cur_t: i64,
+    input: &Input,
+    calculator: &DurationCalculator,
+) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -596,14 +602,14 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             max_received_t = max_received_t.max(packet.received_t);
         }
 
-        let batch_duration = estimate_path_duration(packet_type, cur_ids.len(), input, graph);
+        let batch_duration = calculator.get_path_duration(packet_type, cur_ids.len(), 0);
         let next_t = next_t(max_received_t, cur_t, input.cost_r);
         let afford = min_time_limit - (next_t + batch_duration.estimate());
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
     for packet_type in 0..N_PACKET_TYPE {
-        let min_duration = estimate_path_duration(packet_type, MIN_BATCH_SIZE, input, graph);
+        let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
         // パケットを締め切り順にソートする
         packets[packet_type].sort_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
@@ -622,7 +628,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 
         for &packet in &packets[packet_type] {
             let new_duration =
-                estimate_path_duration(packet.packet_type, cur_ids.len() + 1, input, graph);
+                calculator.get_path_duration(packet.packet_type, cur_ids.len() + 1, 0);
             let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &min_duration);
             let changed_to_timeout_batch = if is_timeouted_packet {
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
@@ -689,33 +695,72 @@ impl Duration {
     }
 }
 
-/// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
-/// TODO: 前計算
-fn estimate_path_duration(
-    packet_type: usize,
-    batch_size: usize,
-    input: &Input,
-    graph: &Graph,
-) -> Duration {
-    let mut ret = Duration::new(0, 0);
+struct DurationCalculator {
+    /// path_duration[packet_type][batch_size][from_path_index]
+    path_durations: Vec<Vec<Vec<Duration>>>,
+}
 
-    // core=0から移るswitch costを考慮する
-    ret.fixed += batch_size as i64 * input.cost_switch;
-
-    for node_id in &graph.paths[packet_type].path {
-        let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
-        let full_chunk_count = batch_size / max_batch_size;
-        ret.fixed += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
-
-        let remainder = batch_size % max_batch_size;
-        ret.fixed += graph.nodes[*node_id].costs[remainder];
-
-        if *node_id == SPECIAL_NODE_ID {
-            ret.special_node_count += batch_size as i64;
+impl DurationCalculator {
+    fn new(input: &Input, graph: &Graph) -> Self {
+        let max_b = MAX_BATCH_SIZE.iter().max().unwrap() + 5;
+        let max_path_length = graph.paths.iter().map(|p| p.path.len()).max().unwrap();
+        let mut path_durations =
+            vec![vec![vec![Duration::new(0, 0); max_path_length + 1]; max_b + 1]; N_PACKET_TYPE];
+        for packet_type in 0..N_PACKET_TYPE {
+            for batch_size in 1..=MAX_BATCH_SIZE[packet_type].max(max_b) {
+                for from_path_index in 0..=graph.paths[packet_type].path.len() {
+                    path_durations[packet_type][batch_size][from_path_index] =
+                        DurationCalculator::calculate_path_duration(
+                            packet_type,
+                            batch_size,
+                            from_path_index,
+                            input,
+                            graph,
+                        );
+                }
+            }
         }
+
+        Self { path_durations }
     }
 
-    ret
+    fn get_path_duration(
+        &self,
+        packet_type: usize,
+        batch_size: usize,
+        from_path_index: usize,
+    ) -> Duration {
+        self.path_durations[packet_type][batch_size][from_path_index].clone()
+    }
+
+    /// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
+    fn calculate_path_duration(
+        packet_type: usize,
+        batch_size: usize,
+        from_path_index: usize,
+        input: &Input,
+        graph: &Graph,
+    ) -> Duration {
+        let mut ret = Duration::new(0, 0);
+
+        // core=0から移るswitch costを考慮する
+        ret.fixed += batch_size as i64 * input.cost_switch;
+
+        for node_id in &graph.paths[packet_type].path[from_path_index..] {
+            let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
+            let full_chunk_count = batch_size / max_batch_size;
+            ret.fixed += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;
+
+            let remainder = batch_size % max_batch_size;
+            ret.fixed += graph.nodes[*node_id].costs[remainder];
+
+            if *node_id == SPECIAL_NODE_ID {
+                ret.special_node_count += batch_size as i64;
+            }
+        }
+
+        ret
+    }
 }
 
 /// コアが現状保持しているの処理が終了するまでの時間を見積もる
@@ -776,6 +821,7 @@ fn estimate_task_duration(
         } else {
             task.packets.len()
         };
+
         let max_batch_size = graph.nodes[*node_id].costs.len() - 1;
         let full_chunk_count = packets_count / max_batch_size;
         ret.fixed += graph.nodes[*node_id].costs[max_batch_size] * full_chunk_count as i64;

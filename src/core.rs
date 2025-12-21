@@ -165,3 +165,14 @@ impl IO for StdIO {
 pub trait Solver {
     fn solve<I: Interactor>(&self, n: usize, interactor: &mut I, input: &Input, graph: &Graph);
 }
+
+pub fn calc_timeout_score_rate(score: &Score) -> f64 {
+    let score1 = score.to_score();
+    let no_timeout_score = Score {
+        throughput: score.throughput,
+        timeout_rate: 0.0,
+    };
+    let score2 = no_timeout_score.to_score();
+    let score_rate = (score2 - score1) / score2;
+    score_rate
+}
