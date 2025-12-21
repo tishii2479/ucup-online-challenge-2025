@@ -239,13 +239,18 @@ fn process_task(
 
         let mut chunk_packets = Vec::with_capacity(desired_batch_size);
         for p in cur_task.packets.iter_mut() {
+            // 処理中だったものを処理済みに変える
+            if p.chunk_status == ChunkStatus::Processing {
+                p.chunk_status = ChunkStatus::Advanced;
+                continue;
+            }
             if chunk_packets.len() >= desired_batch_size {
-                break;
+                continue;
             }
             if p.chunk_status == ChunkStatus::Advanced {
                 continue;
             }
-            p.chunk_status = ChunkStatus::Advanced;
+            p.chunk_status = ChunkStatus::Processing;
             chunk_packets.push(*p);
 
             // 一度処理をしたパケットはコアのswitchingを消す
@@ -270,7 +275,7 @@ fn process_task(
         let all_chunk_finished = cur_task
             .packets
             .iter()
-            .all(|p| p.chunk_status == ChunkStatus::Advanced);
+            .all(|p| p.chunk_status != ChunkStatus::NotAdvanced);
         if all_chunk_finished {
             cur_task.path_index += 1;
 
@@ -435,14 +440,14 @@ fn split_task(task: &Task) -> Option<(Task, Task)> {
 fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>) -> Task {
     let is_chunked = packets
         .iter()
-        .any(|p| p.chunk_status == ChunkStatus::Advanced)
+        .any(|p| p.chunk_status != ChunkStatus::NotAdvanced)
         && packets
             .iter()
             .any(|p| p.chunk_status == ChunkStatus::NotAdvanced);
     let path_index = if original.is_chunked
         && packets
             .iter()
-            .all(|p| p.chunk_status == ChunkStatus::Advanced)
+            .all(|p| p.chunk_status != ChunkStatus::NotAdvanced)
     {
         for p in packets.iter_mut() {
             p.chunk_status = ChunkStatus::NotAdvanced;
@@ -683,7 +688,7 @@ fn estimate_task_duration(
     let first_packets = if task.is_chunked {
         task.packets
             .iter()
-            .filter(|&&b| b.chunk_status == ChunkStatus::NotAdvanced)
+            .filter(|&&b| b.chunk_status != ChunkStatus::Advanced)
             .count()
     } else {
         task.packets.len()
@@ -694,7 +699,7 @@ fn estimate_task_duration(
     let has_next_node = task.path_index < graph.paths[task.packet_type].path.len() - 1;
     for p in &task.packets {
         let need_switch =
-            p.is_switching_core && (p.chunk_status == ChunkStatus::NotAdvanced || has_next_node);
+            p.is_switching_core && (p.chunk_status != ChunkStatus::Advanced || has_next_node);
         if need_switch {
             ret.fixed += input.cost_switch;
         }
@@ -719,7 +724,7 @@ fn estimate_task_duration(
         if *node_id == SPECIAL_NODE_ID {
             for p in task.packets.iter().filter(|&p| {
                 if i == 0 && task.is_chunked {
-                    p.chunk_status == ChunkStatus::NotAdvanced
+                    p.chunk_status != ChunkStatus::Advanced
                 } else {
                     true
                 }
