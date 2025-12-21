@@ -98,13 +98,6 @@ impl Solver for GreedySolver {
                     receive_packet(&mut state, t.0, interactor, input, graph, &mut q);
                 }
                 Event::ResumeCore(core_id) => {
-                    // insertでoutdatedなタスクが入っている可能性があるので、task.next_tを確認する
-                    if let Some(cur_task) = &state.cur_tasks[core_id] {
-                        if cur_task.next_t > t.0 {
-                            continue;
-                        }
-                    }
-
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.cur_tasks[core_id] {
                         if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
@@ -701,7 +694,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 impl Duration {
     fn estimate(&self) -> i64 {
         // TODO: worksを開示したら更新する
-        let alpha = 0.9; // :param
+        let alpha = 0.9;
         (self.lower_bound() as f64 + alpha * (self.upper_bound() - self.lower_bound()) as f64)
             .round() as i64
     }
