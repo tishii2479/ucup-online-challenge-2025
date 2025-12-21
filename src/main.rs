@@ -654,19 +654,6 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
             };
 
             if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
-                // if changed_to_timeout_batch && cur_ids.len() < MAX_BATCH_SIZE {
-                //     eprintln!(
-                //         "batch split: type={:2} size={:2} max_received_t={:8} min_time_limit={:8} next_t={:8} duration_lb={:4} duration_ub={:4}",
-                //         packet_type,
-                //         cur_ids.len(),
-                //         max_received_t,
-                //         min_time_limit,
-                //         next_t(max_received_t, cur_t, input.cost_r),
-                //         new_duration.lower_bound(),
-                //         new_duration.upper_bound(),
-                //     );
-                // }
-
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
@@ -714,6 +701,8 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
 impl Duration {
     fn estimate(&self) -> i64 {
         // TODO: worksを開示したら更新する
-        self.upper_bound()
+        let alpha = 0.9; // :param
+        (self.lower_bound() as f64 + alpha * (self.upper_bound() - self.lower_bound()) as f64)
+            .round() as i64
     }
 }
