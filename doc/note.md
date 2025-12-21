@@ -117,6 +117,65 @@ insert
 - lbとubが結構離れている
 - ノード8が判明したタイミングで挿入できる可能性が高そう
 
+## 貪欲を考えよう
+
+input: packetの集合
+output: [(priority, batch)]
+
+評価: `dt*a - 1e4*(timeout/n) (0<a<1)`
+変数
+- packet_typeごとの分割数
+- packet_typeごとの分割位置
+
+### バッチの分割
+- `time_limit`ごとにソートする
+- もう間に合わないものは無視する
+- timeoutするようになる前にバッチを切る
+    - TODO: 後半は分割されるかもなので、無駄になっている可能性がある
+    - TODO: timeoutを緩和
+
+a. パケットがもう来ない場合
+- packet_typeごとにバッチサイズを均等に分ける
+    - `batch_count[type] = ceil(b[type] / BATCH_SIZE)`
+    - `batch_size[type] = ceil(b / batch_count[type])`
+
+b. パケットがまだ来る場合
+- `batch_size`ごとに分割する
+
+### バッチの優先度
+- min_time_limitまでの時間
+- 最適解ではないだろうが、それなりに良い貪欲になっているはず
+
+
+## 課題
+目的: timeoutの最小化、durationの最小化
+
+- durationだけを意識するなら、バッチサイズは30くらいに近いほどよい
+    - 小さいバッチをinsertをすると全体に悪影響が出る
+- 小さいのを間に合わせるのは、後からまだパケットが来るなら非効率
+- 小さいのに大きいのを間に合わせるのは、ちょっとだけ得できるが
+    - が、そもそも小さいのはあまり時間がかからないので、timeoutにはあまり影響がない
+
+- insertをする悪影響を評価できない
+- catch-upをする悪影響を評価できない
+- 貪欲に前から作ると後で損をすることがある
+    - 後ろのpacketが多くtimeoutするかも
+    - 小さいバッチサイズで作成することで、全体が遅れる可能性がある
+- パケットがなくなった時に、他のタスクが終わる待ち時間が発生する
+- 1->2->3だと、1->3に比べて切り替え時間が余分にかかる
+- `special_cost`の推定ができないので、上界で過剰評価している
+
+- insert: timeout +, duration -
+- catch-up: timeout +e, duration +e
+- 貪欲改善: timeout +, duration +
+- 待ち時間を減らす: timeout ., duration +
+- switch-cost: timeout ., duration +
+- special-cost: timeout +, duration .
+
+1. 待ち時間を減らす
+2. 貪欲の改善
+3. catch-up
+4. special-cost, switch-cost
 
 ## TODO
 must
@@ -157,72 +216,10 @@ want
 - タスクを分けるときに、スイッチコストでタイムアウトが発生するかも
     - 分けるので、基本的には減りそうなので大丈夫
 
-## 課題
-目的: timeoutの最小化、durationの最小化
-
-- durationだけを意識するなら、バッチサイズは30くらいに近いほどよい
-    - 小さいバッチをinsertをすると全体に悪影響が出る
-- 小さいのを間に合わせるのは、後からまだパケットが来るなら非効率
-- 小さいのに大きいのを間に合わせるのは、ちょっとだけ得できるが
-    - が、そもそも小さいのはあまり時間がかからないので、timeoutにはあまり影響がない
-
-- insertをする悪影響を評価できない
-- catch-upをする悪影響を評価できない
-- 貪欲に前から作ると後で損をすることがある
-    - 後ろのpacketが多くtimeoutするかも
-    - 小さいバッチサイズで作成することで、全体が遅れる可能性がある
-- パケットがなくなった時に、他のタスクが終わる待ち時間が発生する
-- 1->2->3だと、1->3に比べて切り替え時間が余分にかかる
-- `special_cost`の推定ができないので、上界で過剰評価している
-
-- insert: timeout +, duration -
-- catch-up: timeout +e, duration +e
-- 貪欲改善: timeout +, duration +
-- 待ち時間を減らす: timeout ., duration +
-- switch-cost: timeout ., duration +
-- special-cost: timeout +, duration .
-
-1. 待ち時間を減らす
-2. 貪欲の改善
-3. catch-up
-4. special-cost, switch-cost
-
-## 待ち時間を減らす
-
-- 待ち時間が減るように選択する
-- バグを治す
-- 全てのコアを試す
+## TODO:
 - チャンクから持ってくる
-- コアの選択基準を変える
+- node=8,11,13,15,18は分割して処理する
+    - node=8 -> 4つくらいずつに分ける
+    - node=11 -> 1つずつ処理する
 - 先読みして、事前にチャンクに分けておく
-
-## 貪欲を考えよう
-
-input: packetの集合
-output: [(priority, batch)]
-
-評価: `dt*a - 1e4*(timeout/n) (0<a<1)`
-変数
-- packet_typeごとの分割数
-- packet_typeごとの分割位置
-
-### バッチの分割
-- `time_limit`ごとにソートする
-- もう間に合わないものは無視する
-- timeoutするようになる前にバッチを切る
-    - TODO: 後半は分割されるかもなので、無駄になっている可能性がある
-
-a. パケットがもう来ない場合
-- packet_typeごとにバッチサイズを均等に分ける
-    - `batch_count[type] = ceil(b[type] / BATCH_SIZE)`
-    - `batch_size[type] = ceil(b / batch_count[type])`
-
-b. パケットがまだ来る場合
-- `batch_size`ごとに分割する
-
-### バッチの優先度
-- min_time_limitまでの時間
-- 最適解ではないだろうが、それなりに良い貪欲になっているはず
-
-
-
+- timeoutを緩和
