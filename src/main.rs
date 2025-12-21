@@ -8,7 +8,7 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
-const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [32, 16, 16, 16, 16, 16, 32];
+const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [16, 16, 16, 16, 16, 16, 16];
 const MIN_BATCH_SIZE: usize = 1;
 
 fn main() {
