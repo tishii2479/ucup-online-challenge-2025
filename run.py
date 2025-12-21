@@ -37,7 +37,7 @@ def main() -> None:
     df = pd.read_csv("doc/scores.csv")
 
     for case in CASES:
-        in_file = f"{str(case['seed']).zfill(4)}.txt"
+        in_file = f"{str(case['seed']).zfill(4)}"
         print(
             f"\n--- Running case: n={case['n']}, n_cores={case['n_cores']}, "
             f"arrive_terms={case['arrive_terms']} ({in_file}) ---"
@@ -55,7 +55,7 @@ def main() -> None:
                 "--arrive-term",
                 str(case["arrive_terms"]),
             ],
-            stdout=open(f"in/{in_file}", "w"),
+            stdout=open(f"in/{in_file}.txt", "w"),
         )
 
         result = subprocess.run(
@@ -63,7 +63,7 @@ def main() -> None:
                 "python3",
                 "problem/interactive_runner.py",
                 "./problem/interactor.o",
-                f"in/{in_file}",
+                f"in/{in_file}.txt",
                 "out.txt",
                 "--",
                 "./sol",

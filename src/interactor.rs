@@ -251,10 +251,13 @@ impl Tracker {
         packets: &Vec<Option<Packet>>,
         graph: &Graph,
         input: &Input,
-    ) {
+    ) -> Score {
         if !self.enabled {
             // eprintln!("Tracker is disabled. Score can not be calculated.");
-            return;
+            return Score {
+                throughput: 0.0,
+                timeout_rate: 0.0,
+            };
         }
 
         let score = self.calc_score(n, &packets, graph, input);
@@ -264,6 +267,7 @@ impl Tracker {
             score.throughput,
             score.timeout_rate
         );
+        score
     }
 
     #[allow(dead_code)]

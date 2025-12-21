@@ -8,7 +8,7 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
-const MAX_BATCH_SIZE: usize = 16;
+const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [32, 16, 16, 16, 16, 16, 32];
 const MIN_BATCH_SIZE: usize = 1;
 
 fn main() {
@@ -79,6 +79,17 @@ enum Event {
     ResumeCore(usize), // core_id
 }
 
+fn calc_timeout_score_rate(score: &Score) -> f64 {
+    let score1 = score.to_score();
+    let no_timeout_score = Score {
+        throughput: score.throughput,
+        timeout_rate: 0.0,
+    };
+    let score2 = no_timeout_score.to_score();
+    let score_rate = (score2 - score1) / score2;
+    score_rate
+}
+
 type EventQueue = BinaryHeap<(Reverse<i64>, Event)>;
 
 pub struct GreedySolver {
@@ -129,7 +140,10 @@ impl Solver for GreedySolver {
 
         interactor.send_finish();
 
-        tracker.dump_score(n, &state.packets, graph, input);
+        let score = tracker.dump_score(n, &state.packets, graph, input);
+        let calc_score_rate = calc_timeout_score_rate(&score);
+        eprintln!("timeout score rate: {:.3}%", calc_score_rate * 100.0);
+
         tracker.dump_task_logs();
     }
 }
@@ -230,13 +244,13 @@ fn process_task(
     }
 
     // node_id = [7,11,13,15,18]は分割して処理する
-    // - node_id = 7 -> 小さく分けて処理する
+    // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
     let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
         // 分割して処理する
         1
-    // } else if node_id == SPECIAL_NODE_ID {
-    //     (cur_task.packets.len() / 2).max(4)
+    } else if node_id == SPECIAL_NODE_ID {
+        (cur_task.packets.len() / 4).max(4)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -611,7 +625,7 @@ fn create_tasks(state: &State, cur_t: i64, input: &Input, graph: &Graph) -> Vec<
                     && cur_ids.len() >= 1
             };
 
-            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE {
+            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE[packet_type] {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 

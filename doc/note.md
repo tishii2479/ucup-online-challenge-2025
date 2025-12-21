@@ -183,11 +183,14 @@ b. パケットがまだ来る場合
 ## 課題
 - 序盤のtimeoutを減らす
     - insert, catch-up
-- 最後の局所探索で解決できそう
-    - 空き時間を減らすような工夫
-    - timeoutを緩和、良いバッチを作る
+- 空き時間を減らすような工夫
+- timeoutを緩和、良いバッチを作る
     - packetを全て受け取ってから、コアにタスクを割り当てる度にタスクの順序を最適化
 
+input: {
+    packet_type: [min_time_limit; k]
+    [core_end_t; n_cores]
+}
 state: packet_typeの順序, packet_typeごとのバッチの区切り目
 score: シミュレーションをした後のスコア（node_id=8は推定値）
 neighbor: packet_typeのswap, packet_typeごとの区切り目の変更
@@ -196,4 +199,11 @@ neighbor: packet_typeのswap, packet_typeごとの区切り目の変更
 insertがうまくいかないのは、現状のタスクがtimeoutギリギリに作られているからかも
 分割して先に処理する実装をすればinsertが有効になるかも
 
+局所探索はコストリターンが合わなそう
 
+## task:
+- refactor
+- insertをうまくやる
+- 空き時間を減らすためにコアの選択基準を工夫する
+    - 基本は最大長のものを選ぶ
+    - 長すぎる場合は、近くで選べるものを選ぶ
