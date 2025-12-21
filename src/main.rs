@@ -560,9 +560,9 @@ fn receive_packet(
     let dt = if received_packet {
         input.cost_r
     } else if state.received_packets.size() > 0 {
-        input.cost_r * 2
+        input.cost_r
     } else {
-        input.cost_r * 5
+        input.cost_r * 2
     };
     let next_t = cur_t + dt;
     if next_t <= LAST_PACKET_T {
