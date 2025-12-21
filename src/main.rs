@@ -219,6 +219,7 @@ fn process_task(
         }
 
         // TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
+        // TODO: insert task
     }
 
     let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
@@ -229,6 +230,8 @@ fn process_task(
     let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
         // 分割して処理する
         1
+    } else if node_id == SPECIAL_NODE_ID {
+        (cur_task.packets.len() / 2).max(4)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -385,7 +388,7 @@ fn complete_task(
                 continue;
             };
 
-            let Some((task1, mut task2)) = split_task(task) else {
+            let Some((task1, mut task2)) = split_task(cur_t, task) else {
                 continue;
             };
 
@@ -413,31 +416,55 @@ fn complete_task(
 
 /// タスクを分割する
 /// 割り当てられたパケットが全て処理中でなければ、next_tを現時刻に設定する
-fn split_task(task: &Task) -> Option<(Task, Task)> {
+fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
     if task.packets.len() < 2 {
         return None;
     }
     let mid = task.packets.len() / 2;
 
+    let mut used = vec![false; task.packets.len()];
     let mut packets1 = Vec::with_capacity(mid + 1);
     let mut packets2 = Vec::with_capacity(mid + 1);
 
-    // idsを交互に追加する
-    for id in 0..task.packets.len() {
-        if id % 2 == 0 {
-            packets1.push(task.packets[id]);
-        } else {
-            packets2.push(task.packets[id]);
+    // 1. ChunkStatus::Advancedを優先的にpackets2に割り当てる
+    for i in 0..task.packets.len() {
+        if packets2.len() >= mid {
+            break;
+        }
+        if task.packets[i].chunk_status == ChunkStatus::Advanced {
+            packets2.push(task.packets[i]);
+            used[i] = true;
         }
     }
 
-    let task1 = build_task_from_split(task, packets1);
-    let task2 = build_task_from_split(task, packets2);
+    let task2_can_process_immediately = packets2.len() >= mid;
+
+    let next_t1 = task.next_t;
+    let next_t2 = if task2_can_process_immediately {
+        cur_t
+    } else {
+        task.next_t
+    };
+
+    // 2. 残りを追加する
+    for i in 0..task.packets.len() {
+        if used[i] {
+            continue;
+        }
+        if packets1.len() < mid {
+            packets1.push(task.packets[i]);
+        } else {
+            packets2.push(task.packets[i]);
+        }
+    }
+
+    let task1 = build_task_from_split(task, packets1, next_t1);
+    let task2 = build_task_from_split(task, packets2, next_t2);
 
     Some((task1, task2))
 }
 
-fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>) -> Task {
+fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>, next_t: i64) -> Task {
     let is_chunked = packets
         .iter()
         .any(|p| p.chunk_status != ChunkStatus::NotAdvanced)
@@ -457,7 +484,7 @@ fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>) -> Tas
         original.path_index
     };
     Task {
-        next_t: original.next_t,
+        next_t,
         packet_type: original.packet_type,
         path_index,
         is_chunked,
