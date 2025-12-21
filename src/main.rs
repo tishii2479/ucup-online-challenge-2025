@@ -468,28 +468,18 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
             packets2.push(task.packets[i]);
             used[i] = true;
         }
-    } else {
+    }
+    if task.is_chunked && packets2.len() < mid {
+        used.fill(false);
+        packets2.clear();
+
         for i in 0..task.packets.len() {
             if packets2.len() >= mid {
                 break;
             }
-            if task.packets[i].is_advanced {
+            if !task.packets[i].is_advanced {
                 packets2.push(task.packets[i]);
                 used[i] = true;
-            }
-        }
-        if task.is_chunked && packets2.len() < mid {
-            used.fill(false);
-            packets2.clear();
-
-            for i in 0..task.packets.len() {
-                if packets2.len() >= mid {
-                    break;
-                }
-                if !task.packets[i].is_advanced {
-                    packets2.push(task.packets[i]);
-                    used[i] = true;
-                }
             }
         }
     }
