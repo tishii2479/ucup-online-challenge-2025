@@ -8,7 +8,8 @@ use crate::{core::*, interactor::*, libb::*};
 
 const INF: i64 = 1_000_000_000_000;
 const TRACK: bool = true;
-const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [16, 16, 16, 16, 16, 16, 16];
+const B: usize = 16;
+const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
 
 fn main() {
@@ -244,13 +245,11 @@ fn process_task(
     }
 
     // node_id = [7,11,13,15,18]は分割して処理する
-    // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
+    // - TODO: node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
     let desired_batch_size = if [11, 13, 15, 18].contains(&node_id) {
         // 分割して処理する
         1
-    // } else if node_id == SPECIAL_NODE_ID {
-    //     (cur_task.packets.len() / 2).max(2)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -522,6 +521,7 @@ fn receive_packet(
 ) {
     // パケットを登録する
     let (_, packets) = interactor.send_receive_packets(cur_t);
+    let received_packet = packets.len() > 0;
     for packet in packets {
         let i = packet.i;
         state.packets[i] = Some(packet);
@@ -554,7 +554,12 @@ fn receive_packet(
     }
 
     // 次のパケット受信イベントを登録する
-    let next_t = cur_t + input.cost_r * 10; // TODO: 調整
+    let dt = if received_packet {
+        input.cost_r
+    } else {
+        input.cost_r * 10
+    };
+    let next_t = cur_t + dt;
     if next_t <= LAST_PACKET_T {
         q.push((Reverse(next_t), Event::ReceivePacket));
     }
