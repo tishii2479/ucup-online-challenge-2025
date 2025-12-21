@@ -109,10 +109,7 @@ pub fn estimate_task_duration(
     packet_special_cost: &Vec<Option<i64>>,
 ) -> Duration {
     let first_packets = if task.is_chunked {
-        task.packets
-            .iter()
-            .filter(|&&b| b.chunk_status != ChunkStatus::Advanced)
-            .count()
+        task.packets.iter().filter(|&&b| !b.is_advanced).count()
     } else {
         task.packets.len()
     };
@@ -121,8 +118,7 @@ pub fn estimate_task_duration(
 
     let has_next_node = task.path_index < graph.paths[task.packet_type].path.len() - 1;
     for p in &task.packets {
-        let need_switch =
-            p.is_switching_core && (p.chunk_status != ChunkStatus::Advanced || has_next_node);
+        let need_switch = p.is_switching_core && (!p.is_advanced || has_next_node);
         if need_switch {
             ret.fixed += input.cost_switch;
         }
@@ -148,7 +144,7 @@ pub fn estimate_task_duration(
         if *node_id == SPECIAL_NODE_ID {
             for p in task.packets.iter().filter(|&p| {
                 if i == 0 && task.is_chunked {
-                    p.chunk_status != ChunkStatus::Advanced
+                    !p.is_advanced
                 } else {
                     true
                 }

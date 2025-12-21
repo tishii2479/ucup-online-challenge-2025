@@ -276,18 +276,14 @@ fn process_task(
         let mut min_i = cur_task.packets.len();
         for (i, p) in cur_task.packets.iter_mut().enumerate() {
             // 処理中だったものを処理済みに変える
-            if p.chunk_status == ChunkStatus::Processing {
-                p.chunk_status = ChunkStatus::Advanced;
-                continue;
-            }
             if chunk_packets.len() >= desired_batch_size {
                 continue;
             }
-            if p.chunk_status == ChunkStatus::Advanced {
+            if p.is_advanced {
                 continue;
             }
 
-            p.chunk_status = ChunkStatus::Processing;
+            p.is_advanced = true;
             min_i = min_i.min(i);
             chunk_packets.push(*p);
 
@@ -310,16 +306,13 @@ fn process_task(
         );
 
         // チャンクが完了したか確認する
-        let all_chunk_finished = cur_task
-            .packets
-            .iter()
-            .all(|p| p.chunk_status != ChunkStatus::NotAdvanced);
+        let all_chunk_finished = cur_task.packets.iter().all(|p| p.is_advanced);
         if all_chunk_finished {
             cur_task.path_index += 1;
             cur_task.last_chunk_min_i = Some(min_i);
             cur_task.is_chunked = false;
             for p in cur_task.packets.iter_mut() {
-                p.chunk_status = ChunkStatus::NotAdvanced;
+                p.is_advanced = false;
             }
         }
     } else {
@@ -480,7 +473,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
             if packets2.len() >= mid {
                 break;
             }
-            if task.packets[i].chunk_status == ChunkStatus::Advanced {
+            if task.packets[i].is_advanced {
                 packets2.push(task.packets[i]);
                 used[i] = true;
             }
@@ -493,7 +486,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
                 if packets2.len() >= mid {
                     break;
                 }
-                if task.packets[i].chunk_status == ChunkStatus::NotAdvanced {
+                if !task.packets[i].is_advanced {
                     packets2.push(task.packets[i]);
                     used[i] = true;
                 }
@@ -525,19 +518,11 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
 }
 
 fn build_task_from_split(original: &Task, mut packets: Vec<PacketStatus>, next_t: i64) -> Task {
-    let is_chunked = packets
-        .iter()
-        .any(|p| p.chunk_status != ChunkStatus::NotAdvanced)
-        && packets
-            .iter()
-            .any(|p| p.chunk_status == ChunkStatus::NotAdvanced);
-    let path_index = if original.is_chunked
-        && packets
-            .iter()
-            .all(|p| p.chunk_status != ChunkStatus::NotAdvanced)
-    {
+    let is_chunked =
+        packets.iter().any(|p| !p.is_advanced) && packets.iter().any(|p| p.is_advanced);
+    let path_index = if original.is_chunked && packets.iter().all(|p| p.is_advanced) {
         for p in packets.iter_mut() {
-            p.chunk_status = ChunkStatus::NotAdvanced;
+            p.is_advanced = false;
         }
         original.path_index + 1
     } else {
@@ -734,7 +719,7 @@ fn create_tasks(
                     .into_iter()
                     .map(|id| PacketStatus {
                         id,
-                        chunk_status: ChunkStatus::NotAdvanced,
+                        is_advanced: false,
                         is_switching_core: true, // 最初はcore=0から必ずコアを移る
                     })
                     .collect(),

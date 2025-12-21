@@ -43,17 +43,10 @@ pub struct Packet {
     pub received_t: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChunkStatus {
-    Advanced,
-    Processing,
-    NotAdvanced,
-}
-
 #[derive(Copy, Clone, Debug)]
 pub struct PacketStatus {
     pub id: usize,
-    pub chunk_status: ChunkStatus,
+    pub is_advanced: bool,
     pub is_switching_core: bool,
 }
 
