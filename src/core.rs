@@ -1,13 +1,13 @@
-use std::io::BufRead;
-use std::io::Write;
-
 use crate::interactor::Interactor;
+
+pub const TIME_LIMIT: f64 = 9.8;
 
 pub const N_SUBTASK: usize = 5;
 pub const N_PACKET_TYPE: usize = 7;
 pub const N_NODE: usize = 20;
 pub const N_SPECIAL: usize = 8;
 pub const SPECIAL_NODE_ID: usize = 8 - 1; // 0-indexed
+pub const MAX_T: i64 = 10_000_000;
 pub const LAST_PACKET_T: i64 = 5_000_000;
 pub const SPECIAL_COST_SUM: i64 = 3 + 5 + 8 + 11 + 14 + 17 + 29 + 73;
 pub const CHUNK_NODES: [usize; 4] = [11, 13, 15, 18];
@@ -113,46 +113,6 @@ impl Duration {
 
     pub fn upper_bound(&self) -> i64 {
         self.fixed + self.special_node_count * SPECIAL_COST_SUM
-    }
-}
-
-pub trait IO {
-    fn read_line(&self) -> String;
-    fn write_line(&mut self, line: &str);
-}
-
-pub struct StdIO {
-    stdin: std::io::Stdin,
-    stdout: std::io::Stdout,
-    to_stderr: bool,
-}
-
-impl StdIO {
-    pub fn new(to_stderr: bool) -> Self {
-        Self {
-            stdin: std::io::stdin(),
-            stdout: std::io::stdout(),
-            to_stderr,
-        }
-    }
-}
-
-impl IO for StdIO {
-    fn read_line(&self) -> String {
-        let mut line = String::new();
-        self.stdin
-            .lock()
-            .read_line(&mut line)
-            .expect("Failed to read line");
-        line.trim().to_string()
-    }
-
-    fn write_line(&mut self, line: &str) {
-        writeln!(self.stdout.lock(), "{}", line).expect("Failed to write line");
-        if self.to_stderr {
-            eprintln!("Sent: {}", line);
-        }
-        self.stdout.lock().flush().expect("Failed to flush stdout");
     }
 }
 

@@ -1,13 +1,14 @@
 mod calculator;
 mod core;
+mod fallback;
 mod interactor;
 mod libb;
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
-use crate::{calculator::*, core::*, interactor::*, libb::*};
+use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
-const TRACK: bool = true;
+const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 
 const B: usize = 16;
@@ -16,27 +17,60 @@ const MIN_BATCH_SIZE: usize = 1;
 const INIT_ALPHA: f64 = 0.8;
 const INIT_WEIGHT: f64 = 50.;
 
-fn main() {
-    let io = StdIO::new(false);
-    let interactor = IOInteractor::new(io);
-    let solver = GreedySolver::new(TRACK);
-    let runner = Runner;
-    let _ = runner.run(solver, interactor);
+const FALLBACK_DURATION: f64 = 0.3;
+
+fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
+    const MIN_AWAIT_INTERVAL: i64 = 40;
+    const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
+
+    let in_progress = cur_t <= state.last_received_t + LAST_RECEIVED_T_THRESHOLD
+        && state.received_packets.size() > 0;
+    if in_progress {
+        input.cost_r
+    } else {
+        MIN_AWAIT_INTERVAL.max(input.cost_r)
+    }
 }
 
-pub struct Runner;
+fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
+    let average_duration = elapsed / (completed_subtask as f64);
+    let expected_duration = average_duration * N_SUBTASK as f64;
+    if expected_duration < TIME_LIMIT {
+        return false;
+    }
+    let remain_subtask = N_SUBTASK - completed_subtask;
+    let min_duration_without_fallback =
+        elapsed + average_duration + (remain_subtask - 1) as f64 * FALLBACK_DURATION;
+    min_duration_without_fallback > TIME_LIMIT
+}
 
-impl Runner {
-    pub fn run(&self, solver: impl Solver, mut interactor: impl Interactor) {
-        let graph = interactor.read_graph();
-        let input = interactor.read_input();
-        eprintln!("input: {:?}", input);
+fn main() {
+    time::start_clock(1.);
+    let io = StdIO::new(false);
+    let mut interactor = IOInteractor::new(io);
+    let graph = interactor.read_graph();
+    let input = interactor.read_input();
+    eprintln!("input: {:?}", input);
 
-        for _ in 0..N_SUBTASK {
-            let n = interactor.read_n();
+    let mut is_fallback = false;
+    let solver = GreedySolver::new(TRACKER_ENABLED);
+    let fallback_solver = FallbackSolver;
+
+    eprintln!("start: {:.3}", time::elapsed_seconds());
+    for task_i in 0..N_SUBTASK {
+        let n = interactor.read_n();
+        if is_fallback {
+            fallback_solver.solve(n, &mut interactor, &input, &graph);
+        } else {
             solver.solve(n, &mut interactor, &input, &graph);
         }
+
+        if should_fallback(task_i + 1, time::elapsed_seconds()) {
+            eprintln!("switch to fallback solver: {:.3}", time::elapsed_seconds());
+            is_fallback = true;
+        }
     }
+    eprintln!("elapsed: {:.3}", time::elapsed_seconds());
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +94,7 @@ pub struct State {
     idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
     received_packets: IndexSet,
+    last_received_t: i64,
     duration_estimator: DurationEstimator,
 }
 
@@ -72,6 +107,7 @@ impl State {
             idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
+            last_received_t: -INF,
             duration_estimator: DurationEstimator::new(n, INIT_ALPHA, INIT_WEIGHT),
         }
     }
@@ -192,7 +228,13 @@ fn process_packets(
 
     q.push((Reverse(cur_task.next_t), Event::ResumeCore(core_id)));
 
-    interactor.send_execute(cur_t, core_id, node_id, packets.len(), &packets);
+    interactor.send_execute(
+        cur_t,
+        core_id,
+        node_id,
+        packets.len(),
+        packets.iter().map(|p| p.id).collect::<Vec<_>>(),
+    );
 
     for p in packets {
         tracker.add_packet_history(
@@ -257,10 +299,9 @@ fn process_task(
     cur_task.last_chunk_min_i = None;
 
     // node_id = [7,11,13,15,18]は分割して処理する
-    // - TODO: node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
+    // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
-        // 分割して処理する
         1
     } else if node_id == SPECIAL_NODE_ID && state.received_packets.size() == state.packets.len() {
         B / 2
@@ -543,16 +584,16 @@ fn receive_packet(
     q: &mut EventQueue,
 ) {
     // パケットを登録する
-    let (_, packets) = interactor.send_receive_packets(cur_t);
-    let received_packet = packets.len() > 0;
-    for packet in packets {
-        let i = packet.i;
-        state.packets[i] = Some(packet);
-        state.await_packets.add(i);
-        state.received_packets.add(i);
-    }
+    if let Some(packets) = interactor.send_receive_packets(cur_t) {
+        for packet in packets {
+            let i = packet.i;
+            state.packets[i] = Some(packet);
+            state.await_packets.add(i);
+            state.received_packets.add(i);
+        }
 
-    if received_packet {
+        state.last_received_t = cur_t;
+
         // packet_typeごとにタスクを作成して、優先度を計算する
         let mut tasks = create_tasks(&state, cur_t, input, &calculator);
 
@@ -580,15 +621,9 @@ fn receive_packet(
     }
 
     // 次のパケット受信イベントを登録する
-    let dt = if received_packet {
-        input.cost_r
-    } else if state.received_packets.size() > 0 {
-        input.cost_r
-    } else {
-        input.cost_r * 2
-    };
+    let dt = get_receive_dt(cur_t, state, input);
     let next_t = cur_t + dt;
-    if next_t <= LAST_PACKET_T {
+    if next_t <= MAX_T {
         q.push((Reverse(next_t), Event::ReceivePacket));
     }
 }

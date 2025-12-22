@@ -2,24 +2,27 @@
 1. packet_typeごとに`(cur_task.s / 2).min(n_packet_type)`のバッチを作る
     - time_limitが近い順にpacketを選ぶ
     - そもそも間に合わないものは選択しない
-    - そのままだとtimeoutするパケットがなければ挿入しなくて良い
 2. packet_typeごとに挿入した後で、元のバッチを進めて、d_timeoutとdtを求める
+    - そのままだとtimeoutするパケットがなければ挿入しなくて良い
     ```rust
     let mut t = 0;
     for split_index in path_index..=path.len() {
         let mut t = cur_t + insert_packet_duration;
-        t += duration(cur_task to split_index)
+        t += task_duration(cur_task to split_index)
         let (task1, task2) = split_task(cur_task);
-        let task1_end_t = t + duration(task1);
-        let task2_end_t = task1_end_t + duration(task2);
+        let task1_end_t = t + task_duration(task1);
+        let task2_end_t = task1_end_t + task_duration(task2);
 
         let dt = task2_end_t - cur_t;
-        let d_timeout = calc_timeout(task1, task1_end_t) + calc_timeout(task2, task2_end_t);
+        let d_timeout = diff_timeout(insert_task.packets, min_time_limit, cur_t)
+            + diff_timeout(task1.packets, cur_task_end_t, task1_end_t)
+            + diff_timeout(task2.packets, cur_task_end_t, task2_end_t);
     }
     ```
 3. `(d_timeout, dt)`でコアごとにソートする
 4. 各コアについて1つを上限で、`d_timeout < 0`を採用する
 5. 挿入する
+    - `cur_tasks[core_id].register_split((split_path_index, s1))`
     - `idle_tasks[core].push(cur_tasks[core_id])`
     - `cur_tasks[core_id] = insert task`
     - `q.push((cur_task.next_t.max(insert_task.next_t), ConsumeCore))`

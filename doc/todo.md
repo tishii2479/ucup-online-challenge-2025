@@ -7,10 +7,7 @@ must
         - 正規化して評価関数を頑張る
         - 基本は最大長のものを選ぶ
         - dtが大きすぎる場合は、近くで選べるものを選ぶ
-    - chunkされたバッチを持ってくる
-        - chunkの状態更新を治す
-            - 最後のチャンクを処理している時にis_chunked = falseになっている
-            - ので、チャンクの残りを持ってくることができない
+    - chunkされたバッチを持っていくの確認
     - 先読みしてタスクをチャンクに分けておく
 
 want
@@ -23,12 +20,11 @@ want
 
 ## LAST
 - TRACK=false
-- dt、batch-size, alphaを変えてたくさん提出する
-    - 最後は安全なdt or best provisional scoreを提出する
-    - receive_packetのdtの調整
-        - 安全なdtで提出する
+- batch-size, alphaを変えてたくさん提出する
+    - 最後はbest provisional scoreを提出する
     - パラメータのチューニング
         - `max_batch_size`: `n_cores, n, packet_type` ごとに良いバッチサイズがあるはず
+        - `alpha`
 
 ## others.
 - 暫定テストケースを探る

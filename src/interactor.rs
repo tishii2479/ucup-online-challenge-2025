@@ -1,18 +1,64 @@
 use crate::core::*;
+use std::io::BufRead;
+use std::io::Write;
 use std::str::FromStr;
+
+pub trait IO {
+    fn read_line(&self) -> String;
+    fn write_line(&mut self, line: &str);
+    fn flush(&mut self);
+}
+
+pub struct StdIO {
+    stdin: std::io::Stdin,
+    stdout: std::io::Stdout,
+    to_stderr: bool,
+}
+
+impl StdIO {
+    pub fn new(to_stderr: bool) -> Self {
+        Self {
+            stdin: std::io::stdin(),
+            stdout: std::io::stdout(),
+            to_stderr,
+        }
+    }
+}
+
+impl IO for StdIO {
+    fn read_line(&self) -> String {
+        let mut line = String::new();
+        self.stdin
+            .lock()
+            .read_line(&mut line)
+            .expect("Failed to read line");
+        line.trim().to_string()
+    }
+
+    fn write_line(&mut self, line: &str) {
+        writeln!(self.stdout.lock(), "{}", line).expect("Failed to write line");
+        if self.to_stderr {
+            eprintln!("Sent: {}", line);
+        }
+    }
+
+    fn flush(&mut self) {
+        self.stdout.lock().flush().expect("Failed to flush stdout");
+    }
+}
 
 pub trait Interactor {
     fn read_graph(&mut self) -> Graph;
     fn read_input(&mut self) -> Input;
     fn read_n(&mut self) -> usize;
-    fn send_receive_packets(&mut self, t: i64) -> (usize, Vec<Packet>);
+    fn send_receive_packets(&mut self, t: i64) -> Option<Vec<Packet>>;
     fn send_execute(
         &mut self,
         t: i64,
         core_id: usize,
         node_id: usize,
         s: usize,
-        packets: &[PacketStatus],
+        packets: Vec<usize>,
     );
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]>;
     fn send_finish(&mut self);
@@ -94,13 +140,17 @@ impl<I: IO> Interactor for IOInteractor<I> {
         }
     }
 
-    fn send_receive_packets(&mut self, t: i64) -> (usize, Vec<Packet>) {
+    fn send_receive_packets(&mut self, t: i64) -> Option<Vec<Packet>> {
         self.io.write_line(&format!("R {}", t));
+        self.io.flush();
 
         let p = self.read_single::<i64>();
         assert_ne!(p, -1, "ReceivePacket returned -1");
 
         let p = p as usize;
+        if p == 0 {
+            return None;
+        }
         let mut packets = Vec::with_capacity(p);
         for _ in 0..p {
             let line = self.io.read_line();
@@ -118,7 +168,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
                 received_t: t,
             });
         }
-        (p, packets)
+        Some(packets)
     }
 
     fn send_execute(
@@ -127,7 +177,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
         core_id: usize,
         node_id: usize,
         s: usize,
-        packets: &[PacketStatus],
+        packets: Vec<usize>,
     ) {
         self.io.write_line(&format!(
             "E {} {} {} {} {}",
@@ -136,8 +186,8 @@ impl<I: IO> Interactor for IOInteractor<I> {
             node_id + 1,
             s,
             packets
-                .iter()
-                .map(|p| (p.id + 1).to_string())
+                .into_iter()
+                .map(|p| (p + 1).to_string())
                 .collect::<Vec<_>>()
                 .join(" ")
         ));
@@ -145,6 +195,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]> {
         self.io.write_line(&format!("Q {} {}", t, i + 1));
+        self.io.flush();
 
         let bitmap = self.read_single::<i64>();
         if bitmap == -1 {
@@ -163,6 +214,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
     fn send_finish(&mut self) {
         self.io.write_line("F");
+        self.io.flush();
     }
 }
 

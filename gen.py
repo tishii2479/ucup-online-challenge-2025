@@ -1,13 +1,12 @@
 SUBTASK = 5
 COST_R = 20
-ARRIVE_START = 1000
 N_PACKET_TYPE = 7
 TIMEOUT_MIN = 1
 TIMEOUT_MAX = 100_000
 N_SPECIAL = 8
 
 
-def gen(seed: int, n: int, n_cores: int, arrive_term: int) -> None:
+def gen(seed: int, n: int, n_cores: int, arrive_term: int, arrive_start: int) -> None:
     import random
 
     rnd = random.Random(seed)
@@ -24,7 +23,7 @@ def gen(seed: int, n: int, n_cores: int, arrive_term: int) -> None:
         print(n)
         data = []
         for i in range(n):
-            arrive = ARRIVE_START + rnd.randrange(0, arrive_term)
+            arrive = arrive_start + rnd.randrange(0, arrive_term)
             packet_type = rnd.randrange(0, N_PACKET_TYPE) + 1
             timeout = rnd.randint(TIMEOUT_MIN, TIMEOUT_MAX)
             works = rnd.randrange(0, 1 << N_SPECIAL)
@@ -43,9 +42,10 @@ def main() -> None:
     parser.add_argument("--n", type=int, required=True)
     parser.add_argument("--n-cores", type=int, required=True)
     parser.add_argument("--arrive-term", type=int, required=True)
+    parser.add_argument("--arrive-start", type=int, default=1_000)
 
     args = parser.parse_args()
-    gen(args.seed, args.n, args.n_cores, args.arrive_term)
+    gen(args.seed, args.n, args.n_cores, args.arrive_term, args.arrive_start)
 
 
 if __name__ == "__main__":
