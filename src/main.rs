@@ -622,7 +622,6 @@ fn insert_interrupt_tasks(
     calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
-    return;
     let max_insert_batch_size = (B / 4).max(4);
     let min_task_start_t = (0..input.n_cores)
         .map(|core_id| cur_t + calculate_core_duration(state, core_id, input, graph).upper_bound())
@@ -633,7 +632,6 @@ fn insert_interrupt_tasks(
         let packet = state.packets[*await_packet].as_ref().unwrap();
 
         // 1. min_task_start_tから処理を開始したらtimeoutするパケット
-        // TODO: 多分削除して良い
         let duration_b1 = calculator.get_path_duration(packet.packet_type, 1, 0);
         let next_t = (packet.received_t + input.cost_r).max(min_task_start_t);
         if next_t + duration_b1.upper_bound() <= packet.time_limit {
@@ -648,11 +646,6 @@ fn insert_interrupt_tasks(
 
         packets[packet.packet_type].push(packet);
     }
-
-    // fn calc_task_duration(task: &Task, state: &State, input: &Input, graph: &Graph) -> i64 {
-    //     let d = calculate_task_duration(task, input, graph, &state.packet_special_cost, None);
-    //     state.duration_estimator.estimate(&d, task.packet_type)
-    // }
 
     let mut cands = vec![];
     for packet_type in 0..N_PACKET_TYPE {
@@ -769,7 +762,7 @@ fn insert_interrupt_tasks(
                 let d_timeout = new_timeout - cur_timeout;
                 let dt = task2_end_t - cur_insert_end_t;
 
-                if d_timeout < 0 {
+                if d_timeout < 0 && dt <= 0 {
                     let insert_task = Task::new(
                         cur_task_next_t,
                         packet_type,
