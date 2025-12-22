@@ -42,6 +42,7 @@ impl DurationCalculator {
     }
 
     /// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
+    /// NOTE: SPECIAL_NODEは判明していないものとしている
     pub fn calculate_path_duration(
         packet_type: usize,
         batch_size: usize,
@@ -74,7 +75,7 @@ impl DurationCalculator {
 }
 
 /// コアが現状保持しているの処理が終了するまでの時間を見積もる
-pub fn estimate_core_duration(
+pub fn calculate_core_duration(
     state: &State,
     core_id: usize,
     input: &Input,
@@ -82,19 +83,21 @@ pub fn estimate_core_duration(
 ) -> Duration {
     let mut ret = Duration::new(0, 0);
     if let Some(cur_task) = &state.next_tasks[core_id] {
-        ret.add(&estimate_task_duration(
+        ret.add(&calculate_task_duration(
             cur_task,
             input,
             graph,
             &state.packet_special_cost,
+            None,
         ));
     }
     for idle_task in &state.idle_tasks[core_id] {
-        ret.add(&estimate_task_duration(
+        ret.add(&calculate_task_duration(
             idle_task,
             input,
             graph,
             &state.packet_special_cost,
+            None,
         ));
     }
     ret
@@ -102,11 +105,12 @@ pub fn estimate_core_duration(
 
 /// タスクを終了するのにかかる時間を見積もる
 /// NOTE: estimate_path_durationはnode=8が判明したことを考慮していないので、こっちを使う必要がある
-pub fn estimate_task_duration(
+pub fn calculate_task_duration(
     task: &Task,
     input: &Input,
     graph: &Graph,
     packet_special_cost: &Vec<Option<i64>>,
+    end_path_index: Option<usize>, // exclusive
 ) -> Duration {
     let first_packets = if task.is_chunked {
         task.packets.iter().filter(|&&b| !b.is_advanced).count()
@@ -124,10 +128,9 @@ pub fn estimate_task_duration(
         }
     }
 
-    for (i, node_id) in graph.paths[task.packet_type].path[task.path_index..]
-        .iter()
-        .enumerate()
-    {
+    let path = &graph.paths[task.packet_type].path;
+    let end_path_index = end_path_index.unwrap_or(path.len());
+    for (i, node_id) in path[task.path_index..end_path_index].iter().enumerate() {
         let packets_count = if i == 0 {
             first_packets
         } else {

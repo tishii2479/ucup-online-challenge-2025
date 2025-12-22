@@ -79,8 +79,23 @@ pub struct Task {
     packet_type: usize,
     path_index: usize,
     is_chunked: bool,
-    last_chunk_min_i: Option<usize>,
     packets: Vec<PacketStatus>,
+    last_chunk_min_i: Option<usize>,
+    end_path_index: Option<usize>,
+}
+
+impl Task {
+    fn new(next_t: i64, packet_type: usize, path_index: usize, packets: Vec<PacketStatus>) -> Self {
+        Self {
+            next_t,
+            packet_type,
+            path_index,
+            is_chunked: false,
+            packets,
+            last_chunk_min_i: None,
+            end_path_index: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -148,12 +163,30 @@ impl Solver for GreedySolver {
         while let Some((t, event)) = q.pop() {
             match event {
                 Event::ReceivePacket => {
-                    receive_packet(&mut state, t.0, interactor, input, &calculator, &mut q);
+                    receive_packet(
+                        &mut state,
+                        t.0,
+                        interactor,
+                        input,
+                        graph,
+                        &calculator,
+                        &mut q,
+                    );
                 }
                 Event::ResumeCore(core_id) => {
+                    // insertされてexpireしているeventはスキップする
+                    if let Some(cur_task) = &state.next_tasks[core_id] {
+                        if t.0 < cur_task.next_t {
+                            continue;
+                        }
+                    }
+
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.next_tasks[core_id] {
-                        if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
+                        let end_path_index = cur_task
+                            .end_path_index
+                            .unwrap_or(graph.paths[cur_task.packet_type].path.len());
+                        if cur_task.path_index >= end_path_index {
                             complete_task(
                                 &mut state,
                                 core_id,
@@ -412,7 +445,8 @@ fn complete_task(
     state.next_tasks[core_id] = None;
 
     // idle_tasksからタスクを取得する
-    if let Some(task) = state.idle_tasks[core_id].pop() {
+    if let Some(mut task) = state.idle_tasks[core_id].pop() {
+        task.next_t = cur_t;
         q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
         state.next_tasks[core_id] = Some(task);
         return;
@@ -437,11 +471,15 @@ fn complete_task(
             if other_core_id == core_id {
                 continue;
             }
-            if let Some(task) = state.idle_tasks[other_core_id].pop() {
-                q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-                state.next_tasks[core_id] = Some(task);
-                return;
-            }
+            // if let Some(mut task) = state.idle_tasks[other_core_id].pop() {
+            //     task.next_t = cur_t;
+            //     task.packets
+            //         .iter_mut()
+            //         .for_each(|p| p.is_switching_core = true);
+            //     q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
+            //     state.next_tasks[core_id] = Some(task);
+            //     return;
+            // }
         }
 
         let mut other_cores = (0..input.n_cores)
@@ -451,7 +489,7 @@ fn complete_task(
 
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
         other_cores.sort_by_key(|&id| {
-            let duration = estimate_core_duration(state, id, input, graph);
+            let duration = calculate_core_duration(state, id, input, graph);
             let duration = state.duration_estimator.estimate(
                 &duration,
                 state.next_tasks[id].as_ref().unwrap().packet_type,
@@ -513,6 +551,7 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
             is_chunked,
             packets,
             last_chunk_min_i: None,
+            end_path_index: None,
         }
     }
 
@@ -574,12 +613,249 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
     Some((task1, task2))
 }
 
+/// 現状のタスクの後に挿入するとtimeoutするパケットを挿入する
+fn insert_interrupt_tasks(
+    state: &mut State,
+    cur_t: i64,
+    input: &Input,
+    graph: &Graph,
+    calculator: &DurationCalculator,
+    q: &mut EventQueue,
+) {
+    return;
+    let max_insert_batch_size = (B / 4).max(4);
+    let min_task_start_t = (0..input.n_cores)
+        .map(|core_id| cur_t + calculate_core_duration(state, core_id, input, graph).upper_bound())
+        .min()
+        .unwrap();
+    let mut packets = vec![vec![]; N_PACKET_TYPE];
+    for await_packet in state.await_packets.iter() {
+        let packet = state.packets[*await_packet].as_ref().unwrap();
+
+        // 1. min_task_start_tから処理を開始したらtimeoutするパケット
+        // TODO: 多分削除して良い
+        let duration_b1 = calculator.get_path_duration(packet.packet_type, 1, 0);
+        let next_t = (packet.received_t + input.cost_r).max(min_task_start_t);
+        if next_t + duration_b1.upper_bound() <= packet.time_limit {
+            continue;
+        }
+
+        // 2. next_tから開始したら間に合うパケット
+        let next_t = (packet.received_t + input.cost_r).max(cur_t);
+        if next_t + duration_b1.lower_bound() > packet.time_limit {
+            continue;
+        }
+
+        packets[packet.packet_type].push(packet);
+    }
+
+    // fn calc_task_duration(task: &Task, state: &State, input: &Input, graph: &Graph) -> i64 {
+    //     let d = calculate_task_duration(task, input, graph, &state.packet_special_cost, None);
+    //     state.duration_estimator.estimate(&d, task.packet_type)
+    // }
+
+    let mut cands = vec![];
+    for packet_type in 0..N_PACKET_TYPE {
+        if packets[packet_type].len() == 0 {
+            continue;
+        }
+
+        packets[packet_type].sort_by_key(|p| p.time_limit);
+        let insert_ids: Vec<_> = packets[packet_type]
+            .iter()
+            .take(max_insert_batch_size)
+            .map(|p| p.i)
+            .collect();
+        if insert_ids.len() == 0 {
+            continue;
+        }
+        let max_received_t = insert_ids
+            .iter()
+            .map(|&id| state.packets[id].as_ref().unwrap().received_t)
+            .max()
+            .unwrap();
+
+        // 各コアへの挿入を試す
+        for insert_core_id in 0..input.n_cores {
+            if state.idle_tasks[insert_core_id].len() > 0 {
+                continue;
+            }
+            let Some(cur_task) = state.next_tasks[insert_core_id].as_ref() else {
+                continue;
+            };
+            let cur_task_duration =
+                calculate_task_duration(cur_task, input, graph, &state.packet_special_cost, None);
+            let cur_task_end_t = cur_t
+                + state
+                    .duration_estimator
+                    .estimate(&cur_task_duration, cur_task.packet_type);
+            let insert_task_duration =
+                calculator.get_path_duration(packet_type, insert_ids.len(), 0);
+            let insert_task_duration = state
+                .duration_estimator
+                .estimate(&insert_task_duration, packet_type);
+            let cur_insert_end_t = cur_task_end_t + insert_task_duration;
+            let cur_timeout = calc_timeout(
+                &cur_task.packets.iter().map(|p| p.id).collect(),
+                &state.packets,
+                cur_task_end_t,
+            ) + calc_timeout(&insert_ids, &state.packets, cur_insert_end_t);
+
+            let cur_task_next_t = cur_task.next_t.max(max_received_t + input.cost_r);
+            let insert_task_end_t = cur_task_next_t + insert_task_duration;
+
+            let start_path_index = if cur_task.is_chunked {
+                cur_task.path_index + 1
+            } else {
+                cur_task.path_index
+            };
+            for split_index in start_path_index..=graph.paths[cur_task.packet_type].path.len() {
+                let duration_before_split = calculate_task_duration(
+                    cur_task,
+                    input,
+                    graph,
+                    &state.packet_special_cost,
+                    Some(split_index),
+                );
+                let after_split_next_t = insert_task_end_t
+                    + state
+                        .duration_estimator
+                        .estimate(&duration_before_split, packet_type);
+                let advanced_cur_task = Task::new(
+                    after_split_next_t,
+                    cur_task.packet_type,
+                    split_index,
+                    cur_task
+                        .packets
+                        .iter()
+                        .map(|p| PacketStatus {
+                            id: p.id,
+                            is_advanced: false,
+                            is_switching_core: false,
+                        })
+                        .collect(),
+                );
+                // TODO: time_limitでソートして半分に分ける
+                let Some((task1, mut task2)) = split_task(after_split_next_t, &advanced_cur_task)
+                else {
+                    continue;
+                };
+                let task1_duration =
+                    calculate_task_duration(&task1, input, graph, &state.packet_special_cost, None);
+                let task2_duration =
+                    calculate_task_duration(&task2, input, graph, &state.packet_special_cost, None);
+                let task1_end_t = after_split_next_t
+                    + state
+                        .duration_estimator
+                        .estimate(&task1_duration, task1.packet_type);
+                task2.next_t = task1_end_t;
+                let task2_end_t = task1_end_t
+                    + state
+                        .duration_estimator
+                        .estimate(&task2_duration, task2.packet_type);
+
+                let new_timeout = calc_timeout(&insert_ids, &state.packets, insert_task_end_t)
+                    + calc_timeout(
+                        &task1.packets.iter().map(|p| p.id).collect(),
+                        &state.packets,
+                        task1_end_t,
+                    )
+                    + calc_timeout(
+                        &task2.packets.iter().map(|p| p.id).collect(),
+                        &state.packets,
+                        task2_end_t,
+                    );
+
+                let d_timeout = new_timeout - cur_timeout;
+                let dt = task2_end_t - cur_insert_end_t;
+
+                if d_timeout < 0 {
+                    let insert_task = Task::new(
+                        cur_task_next_t,
+                        packet_type,
+                        0,
+                        insert_ids
+                            .iter()
+                            .map(|&id| PacketStatus {
+                                id,
+                                is_advanced: false,
+                                is_switching_core: true,
+                            })
+                            .collect(),
+                    );
+                    cands.push((
+                        d_timeout,
+                        dt,
+                        insert_core_id,
+                        split_index,
+                        insert_task,
+                        task1,
+                        task2,
+                    ));
+                }
+            }
+        }
+    }
+
+    cands.sort_by_key(|k| (k.0, k.1));
+
+    let mut inserted = vec![false; N_PACKET_TYPE];
+    for (d_timeout, dt, insert_core_id, split_index, insert_task, task1, task2) in cands {
+        if inserted[insert_task.packet_type] {
+            continue;
+        }
+        if state.idle_tasks[insert_core_id].len() > 0 {
+            continue;
+        }
+        inserted[insert_task.packet_type] = true;
+        let mut cur_task = state.next_tasks[insert_core_id].take().unwrap();
+        cur_task.end_path_index = Some(split_index);
+
+        for p in &insert_task.packets {
+            state.await_packets.remove(p.id);
+        }
+
+        eprintln!(
+            "insert interrupt task: core_id={}, packet_type={}, d_timeout={}, dt={}, insert_task.size={}, cur_task.size={}",
+            insert_core_id,
+            insert_task.packet_type,
+            d_timeout,
+            dt,
+            insert_task.packets.len(),
+            cur_task.packets.len()
+        );
+
+        q.push((
+            Reverse(insert_task.next_t),
+            Event::ResumeCore(insert_core_id),
+        ));
+
+        state.idle_tasks[insert_core_id].push(task2);
+        state.idle_tasks[insert_core_id].push(task1);
+        state.idle_tasks[insert_core_id].push(cur_task);
+        state.next_tasks[insert_core_id] = Some(insert_task);
+    }
+}
+
+/// timeの処理終了時間がend_tの時のtimeoutするパケットの数
+fn calc_timeout(ids: &Vec<usize>, packets: &Vec<Option<Packet>>, end_t: i64) -> i64 {
+    let mut ret = 0;
+    for &i in ids.iter() {
+        let p = packets[i].as_ref().unwrap();
+        if p.time_limit > end_t {
+            ret += 1;
+        }
+    }
+    ret
+}
+
 /// パケット受信イベントの処理
 fn receive_packet(
     state: &mut State,
     cur_t: i64,
     interactor: &mut impl Interactor,
     input: &Input,
+    graph: &Graph,
     calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
@@ -613,6 +889,7 @@ fn receive_packet(
         }
 
         // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
+        insert_interrupt_tasks(state, cur_t, input, graph, calculator, q);
     }
 
     // 全てのパケットを受信していれば次の受信イベントは登録しない
@@ -740,21 +1017,18 @@ fn create_tasks(
     tasks
         .into_iter()
         .map(|(_, max_received_t, packet_type, ids)| {
-            Task {
-                next_t: next_t(max_received_t, cur_t, input.cost_r),
+            Task::new(
+                next_t(max_received_t, cur_t, input.cost_r),
                 packet_type,
-                path_index: 0,
-                is_chunked: false,
-                packets: ids
-                    .into_iter()
+                0,
+                ids.into_iter()
                     .map(|id| PacketStatus {
                         id,
                         is_advanced: false,
                         is_switching_core: true, // 最初はcore=0から必ずコアを移る
                     })
                     .collect(),
-                last_chunk_min_i: None,
-            }
+            )
         })
         .collect()
 }

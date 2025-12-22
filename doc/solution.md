@@ -5,7 +5,6 @@
 2. packet_typeごとに挿入した後で、元のバッチを進めて、d_timeoutとdtを求める
     - そのままだとtimeoutするパケットがなければ挿入しなくて良い
     ```rust
-    let mut t = 0;
     for split_index in path_index..=path.len() {
         let mut t = cur_t + insert_packet_duration;
         t += task_duration(cur_task to split_index)
@@ -22,7 +21,6 @@
 3. `(d_timeout, dt)`でコアごとにソートする
 4. 各コアについて1つを上限で、`d_timeout < 0`を採用する
 5. 挿入する
-    - `cur_tasks[core_id].register_split((split_path_index, s1))`
     - `idle_tasks[core].push(cur_tasks[core_id])`
     - `cur_tasks[core_id] = insert task`
     - `q.push((cur_task.next_t.max(insert_task.next_t), ConsumeCore))`

@@ -180,7 +180,7 @@ void Run()
             t = ouf.readInt();
             // tout<<"E "<<t;
             if (t < 1 || t > MAX_TIME || t < prev_action_time)
-                Fail("Invalid Action: time " + to_string(t));
+                Fail("[3] Invalid Action: time " + to_string(t));
             prev_action_time = t;
             coreId = ouf.readInt();
             // tout<<" "<<coreId;
@@ -242,7 +242,8 @@ void Run()
                 int curNode = path[type][pos];
                 if (curNode != nodeId)
                     Fail("[2] Invalid Action: illegal nodeId for packet " +
-                         to_string(idx));
+                         to_string(idx) + " curNode=" + to_string(curNode) +
+                         " nodeId=" + to_string(nodeId) + " pos=" + to_string(pos) + " type=" + to_string(type));
                 if (t < pkts[idx].t)
                     Fail("Invalid Action: packet " + to_string(idx) +
                          " not ready, " + to_string(t) + " < " +
