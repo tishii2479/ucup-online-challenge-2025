@@ -88,16 +88,6 @@ pub fn calculate_core_duration(
             input,
             graph,
             &state.packet_special_cost,
-            None,
-        ));
-    }
-    for idle_task in &state.idle_tasks[core_id] {
-        ret.add(&calculate_task_duration(
-            idle_task,
-            input,
-            graph,
-            &state.packet_special_cost,
-            None,
         ));
     }
     ret
@@ -110,7 +100,6 @@ pub fn calculate_task_duration(
     input: &Input,
     graph: &Graph,
     packet_special_cost: &Vec<Option<i64>>,
-    end_path_index: Option<usize>, // exclusive
 ) -> Duration {
     let first_packets = if task.is_chunked {
         task.packets.iter().filter(|&&b| !b.is_advanced).count()
@@ -129,8 +118,7 @@ pub fn calculate_task_duration(
     }
 
     let path = &graph.paths[task.packet_type].path;
-    let end_path_index = end_path_index.unwrap_or(path.len());
-    for (i, node_id) in path[task.path_index..end_path_index].iter().enumerate() {
+    for (i, node_id) in path[task.path_index..path.len()].iter().enumerate() {
         let packets_count = if i == 0 {
             first_packets
         } else {

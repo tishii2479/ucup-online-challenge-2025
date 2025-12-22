@@ -104,9 +104,6 @@ pub struct State {
     packet_special_cost: Vec<Option<i64>>,
     /// next_tasks[core_id] := core_idで次に実行するタスク
     next_tasks: Vec<Option<Task>>,
-    /// idle_tasks[core_id] := core_idで待機中のタスク
-    /// 上に積まれているほど優先度が高い
-    idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
     received_packets: IndexSet,
     last_received_t: i64,
@@ -119,7 +116,6 @@ impl State {
             packets: vec![None; n],
             packet_special_cost: vec![None; n],
             next_tasks: vec![None; input.n_cores],
-            idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
             last_received_t: -INF,
@@ -166,13 +162,6 @@ impl Solver for GreedySolver {
                     receive_packet(&mut state, t.0, interactor, input, &calculator, &mut q);
                 }
                 Event::ResumeCore(core_id) => {
-                    // insertされてexpireしているeventはスキップする
-                    if let Some(cur_task) = &state.next_tasks[core_id] {
-                        if t.0 < cur_task.next_t {
-                            continue;
-                        }
-                    }
-
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.next_tasks[core_id] {
                         let end_path_index = cur_task
@@ -286,7 +275,7 @@ fn process_packets(
 fn process_task(
     state: &mut State,
     core_id: usize,
-    cur_t: i64,
+    t: i64,
     interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
@@ -304,7 +293,7 @@ fn process_task(
             if state.packet_special_cost[p.id].is_some() {
                 continue;
             }
-            let work = interactor.send_query_works(cur_t, p.id).unwrap();
+            let work = interactor.send_query_works(t, p.id).unwrap();
             let mut cost_sum = 0;
             for i in 0..N_SPECIAL {
                 if work[i] {
@@ -324,23 +313,20 @@ fn process_task(
     // node_id = [7,11,13,15,18]は分割して処理する
     // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
-    let should_chunk_special_node = node_id == SPECIAL_NODE_ID
-        && should_chunk_special_node_task(cur_t, state, core_id, input, graph);
+    let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
+        1
+    } else if node_id == SPECIAL_NODE_ID && state.received_packets.size() == state.packets.len() {
+        B / 2
+    } else {
+        graph.nodes[node_id].costs.len() - 1
+    };
 
     let cur_task = state.next_tasks[core_id]
         .as_mut()
         .expect("cur_task should be Some");
     cur_task.last_chunk_min_i = None;
 
-    let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
-        1
-    } else if node_id == SPECIAL_NODE_ID && should_chunk_special_node {
-        (B / 4).max(4)
-    } else {
-        graph.nodes[node_id].costs.len() - 1
-    };
     let is_chunk = cur_task.packets.len() > desired_batch_size || cur_task.is_chunked;
-
     if is_chunk {
         cur_task.is_chunked = true;
 
@@ -367,7 +353,7 @@ fn process_task(
 
         process_packets(
             cur_task,
-            cur_t,
+            t,
             Some(&chunk_packets),
             core_id,
             node_id,
@@ -391,7 +377,7 @@ fn process_task(
     } else {
         process_packets(
             cur_task,
-            cur_t,
+            t,
             None,
             core_id,
             node_id,
@@ -413,6 +399,8 @@ fn process_task(
 
 fn should_chunk_special_node_task(
     cur_t: i64,
+    node_id: usize,
+    cur_task: &Task,
     state: &State,
     core_id: usize,
     input: &Input,
@@ -422,10 +410,17 @@ fn should_chunk_special_node_task(
         return false;
     }
 
-    let d0 = calculate_core_duration(state, core_id, input, graph);
-    let d0 = state
-        .duration_estimator
-        .estimate(&d0, state.next_tasks[core_id].as_ref().unwrap().packet_type);
+    let dt = if node_id == SPECIAL_NODE_ID {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+            + cur_task
+                .packets
+                .iter()
+                .map(|p| state.packet_special_cost[p.id].unwrap())
+                .sum::<i64>()
+    } else {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+    };
+
     for other_core_id in 0..input.n_cores {
         if other_core_id == core_id {
             continue;
@@ -433,7 +428,7 @@ fn should_chunk_special_node_task(
         let Some(other_task) = &state.next_tasks[other_core_id] else {
             continue;
         };
-        if cur_t <= other_task.next_t && other_task.next_t < cur_t + d0 {
+        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
             return true;
         }
     }
@@ -471,15 +466,7 @@ fn complete_task(
     // タスク完了
     state.next_tasks[core_id] = None;
 
-    // idle_tasksからタスクを取得する
-    if let Some(mut task) = state.idle_tasks[core_id].pop() {
-        task.next_t = cur_t;
-        q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
-        state.next_tasks[core_id] = Some(task);
-        return;
-    }
-
-    // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
+    // 最も優先度の高いタスクを割り当てて開始する
     let mut tasks = create_tasks(&state, cur_t, input, &calculator);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
@@ -493,22 +480,6 @@ fn complete_task(
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     if input.n_cores > 1 {
-        // idle_tasksがあるならそのままもらってくる
-        for other_core_id in 0..input.n_cores {
-            if other_core_id == core_id {
-                continue;
-            }
-            if let Some(mut task) = state.idle_tasks[other_core_id].pop() {
-                task.next_t = cur_t;
-                task.packets
-                    .iter_mut()
-                    .for_each(|p| p.is_switching_core = true);
-                q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
-                state.next_tasks[core_id] = Some(task);
-                return;
-            }
-        }
-
         let mut other_cores = (0..input.n_cores)
             .filter(|&id| id != core_id)
             .filter(|&id| state.next_tasks[id].is_some())
