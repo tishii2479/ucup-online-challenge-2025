@@ -89,14 +89,6 @@ pub fn estimate_core_duration(
             &state.packet_special_cost,
         ));
     }
-    for idle_task in &state.idle_tasks[core_id] {
-        ret.add(&estimate_task_duration(
-            idle_task,
-            input,
-            graph,
-            &state.packet_special_cost,
-        ));
-    }
     ret
 }
 

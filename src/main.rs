@@ -88,9 +88,6 @@ pub struct State {
     packet_special_cost: Vec<Option<i64>>,
     /// next_tasks[core_id] := core_idで次に実行するタスク
     next_tasks: Vec<Option<Task>>,
-    /// idle_tasks[core_id] := core_idで待機中のタスク
-    /// 上に積まれているほど優先度が高い
-    idle_tasks: Vec<Vec<Task>>,
     await_packets: IndexSet,
     received_packets: IndexSet,
     last_received_t: i64,
@@ -102,7 +99,6 @@ impl State {
             packets: vec![None; n],
             packet_special_cost: vec![None; n],
             next_tasks: vec![None; input.n_cores],
-            idle_tasks: vec![Vec::with_capacity(10); input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
             last_received_t: -INF,
@@ -387,35 +383,10 @@ fn complete_task(
     calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
-    // 遅延したパケット
-    // for p in &state.next_tasks[core_id].as_ref().unwrap().packets {
-    //     let packet = state.packets[p.id].as_ref().unwrap();
-    //     if cur_t > packet.time_limit {
-    //         let d = calculator.get_path_duration(packet.packet_type, 1, 0);
-    //         eprintln!(
-    //             "timeout: id={:5} arr={:8}, to={:4} (lb={:4}, ub={:4}), tl={:8}, end={:8}",
-    //             p.id,
-    //             packet.arrive,
-    //             packet.timeout,
-    //             d.lower_bound(),
-    //             d.upper_bound(),
-    //             packet.time_limit,
-    //             cur_t
-    //         );
-    //     }
-    // }
-
     // タスク完了
     state.next_tasks[core_id] = None;
 
-    // idle_tasksからタスクを取得する
-    if let Some(task) = state.idle_tasks[core_id].pop() {
-        q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
-        state.next_tasks[core_id] = Some(task);
-        return;
-    }
-
-    // idle_taskがなければ、最も優先度の高いタスクを割り当てて開始する
+    // 最も優先度の高いタスクを割り当てて開始する
     let mut tasks = create_tasks(&state, cur_t, input, &calculator);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
@@ -433,11 +404,6 @@ fn complete_task(
         for other_core_id in 0..input.n_cores {
             if other_core_id == core_id {
                 continue;
-            }
-            if let Some(task) = state.idle_tasks[other_core_id].pop() {
-                q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-                state.next_tasks[core_id] = Some(task);
-                return;
             }
         }
 
