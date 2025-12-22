@@ -281,9 +281,6 @@ fn process_task(
             }
             state.packet_special_cost[p.id] = Some(cost_sum);
         }
-
-        // TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
-        // TODO: insert task
     }
 
     // node_id = [7,11,13,15,18]は分割して処理する
@@ -569,8 +566,6 @@ fn receive_packet(
                 state.next_tasks[core_id] = Some(task);
             }
         }
-
-        // TODO: 残っているタスクで、割り込むべき & 割り込めるタスクがあれば差し込む
     }
 
     // 全てのパケットを受信していれば次の受信イベントは登録しない
