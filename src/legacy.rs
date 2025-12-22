@@ -812,3 +812,41 @@ fn insert_interrupt_tasks(
         }
     }
 }
+
+fn should_chunk_special_node_task(
+    cur_t: i64,
+    node_id: usize,
+    cur_task: &Task,
+    state: &State,
+    core_id: usize,
+    input: &Input,
+    graph: &Graph,
+) -> bool {
+    if state.await_packets.size() > 0 {
+        return false;
+    }
+
+    let dt = if node_id == SPECIAL_NODE_ID {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+            + cur_task
+                .packets
+                .iter()
+                .map(|p| state.packet_special_cost[p.id].unwrap())
+                .sum::<i64>()
+    } else {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+    };
+
+    for other_core_id in 0..input.n_cores {
+        if other_core_id == core_id {
+            continue;
+        }
+        let Some(other_task) = &state.next_tasks[other_core_id] else {
+            continue;
+        };
+        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
+            return true;
+        }
+    }
+    false
+}

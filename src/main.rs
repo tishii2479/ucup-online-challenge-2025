@@ -14,8 +14,7 @@ const INF: i64 = 1_000_000_000_000;
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
-const INIT_ALPHA: f64 = 0.8;
-const INIT_WEIGHT: f64 = 50.;
+const ALPHA: f64 = 0.8;
 
 const FALLBACK_DURATION: f64 = 0.3;
 
@@ -95,7 +94,6 @@ pub struct State {
     await_packets: IndexSet,
     received_packets: IndexSet,
     last_received_t: i64,
-    duration_estimator: DurationEstimator,
 }
 
 impl State {
@@ -108,7 +106,6 @@ impl State {
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
             last_received_t: -INF,
-            duration_estimator: DurationEstimator::new(n, INIT_ALPHA, INIT_WEIGHT),
         }
     }
 
@@ -287,9 +284,6 @@ fn process_task(
                 }
             }
             state.packet_special_cost[p.id] = Some(cost_sum);
-            state
-                .duration_estimator
-                .update_alpha(cur_task.packet_type, cost_sum);
         }
 
         // TODO: バッチ内に間に合わなそうなパケットが判明したら、分割して処理したり、別のコアに移したりする
@@ -301,11 +295,8 @@ fn process_task(
     // - node_id = 11 -> 1つずつ処理する
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         1
-    } else if node_id == SPECIAL_NODE_ID
-        && state.received_packets.size() == state.packets.len()
-        && should_chunk_special_node_task(cur_t, node_id, cur_task, state, core_id, input, graph)
-    {
-        (B / 4).max(4)
+    } else if node_id == SPECIAL_NODE_ID && state.received_packets.size() == state.packets.len() {
+        B / 2
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -386,44 +377,6 @@ fn process_task(
     }
 }
 
-fn should_chunk_special_node_task(
-    cur_t: i64,
-    node_id: usize,
-    cur_task: &Task,
-    state: &State,
-    core_id: usize,
-    input: &Input,
-    graph: &Graph,
-) -> bool {
-    if state.await_packets.size() > 0 {
-        return false;
-    }
-
-    let dt = if node_id == SPECIAL_NODE_ID {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-            + cur_task
-                .packets
-                .iter()
-                .map(|p| state.packet_special_cost[p.id].unwrap())
-                .sum::<i64>()
-    } else {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-    };
-
-    for other_core_id in 0..input.n_cores {
-        if other_core_id == core_id {
-            continue;
-        }
-        let Some(other_task) = &state.next_tasks[other_core_id] else {
-            continue;
-        };
-        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
-            return true;
-        }
-    }
-    false
-}
-
 /// タスク完了時の処理
 fn complete_task(
     state: &mut State,
@@ -495,12 +448,7 @@ fn complete_task(
 
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
         other_cores.sort_by_key(|&id| {
-            let duration = estimate_core_duration(state, id, input, graph);
-            let duration = state.duration_estimator.estimate(
-                &duration,
-                state.next_tasks[id].as_ref().unwrap().packet_type,
-            );
-            Reverse(cur_t + duration)
+            Reverse(cur_t + estimate_core_duration(state, id, input, graph).estimate())
         });
 
         for other_core_id in other_cores {
@@ -691,17 +639,8 @@ fn create_tasks(
     fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
         (received_t + cost_r).max(cur_t)
     }
-    fn is_timeouted(
-        packet: &Packet,
-        cur_t: i64,
-        cost_r: i64,
-        min_duration: &Duration,
-        state: &State,
-    ) -> bool {
-        let duration = state
-            .duration_estimator
-            .estimate(min_duration, packet.packet_type);
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + duration
+    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
     }
 
     let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
@@ -712,12 +651,11 @@ fn create_tasks(
             max_received_t = max_received_t.max(packet.received_t);
         }
 
-        let batch_duration = calculator.get_path_duration(packet_type, cur_ids.len(), 0);
+        let batch_duration = calculator
+            .get_path_duration(packet_type, cur_ids.len(), 0)
+            .estimate();
         let next_t = next_t(max_received_t, cur_t, input.cost_r);
-        let duration = state
-            .duration_estimator
-            .estimate(&batch_duration, packet_type);
-        let afford = min_time_limit - (next_t + duration);
+        let afford = min_time_limit - (next_t + batch_duration);
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
 
@@ -725,7 +663,7 @@ fn create_tasks(
         let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
         // パケットを締め切り順にソートする
         packets[packet_type].sort_by_key(|&packet| {
-            if is_timeouted(&packet, cur_t, input.cost_r, &min_duration, state) {
+            if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
                 // そもそも間に合わないパケットは優先度を一番下げる
                 INF
             } else {
@@ -740,21 +678,18 @@ fn create_tasks(
         let mut max_received_t = -INF;
 
         for &packet in &packets[packet_type] {
-            let new_duration =
-                calculator.get_path_duration(packet.packet_type, cur_ids.len() + 1, 0);
-            let is_timeouted_packet =
-                is_timeouted(&packet, cur_t, input.cost_r, &min_duration, state);
-            let duration = state
-                .duration_estimator
-                .estimate(&new_duration, packet.packet_type);
+            let new_duration = calculator
+                .get_path_duration(packet.packet_type, cur_ids.len() + 1, 0)
+                .estimate();
+            let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &min_duration);
             let changed_to_timeout_batch = if is_timeouted_packet {
                 // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
                 // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
                 let next_t = next_t(max_received_t, cur_t, input.cost_r);
-                min_time_limit < next_t + duration && cur_ids.len() >= 1
+                min_time_limit < next_t + new_duration && cur_ids.len() >= 1
             } else {
                 let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
-                min_time_limit.min(packet.time_limit) < next_t + duration && cur_ids.len() >= 1
+                min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
             if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE[packet_type] {
@@ -801,4 +736,11 @@ fn create_tasks(
             }
         })
         .collect()
+}
+
+impl Duration {
+    fn estimate(&self) -> i64 {
+        (self.lower_bound() as f64 + ALPHA * (self.upper_bound() - self.lower_bound()) as f64)
+            .round() as i64
+    }
 }
