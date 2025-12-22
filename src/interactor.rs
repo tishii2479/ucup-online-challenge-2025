@@ -6,7 +6,6 @@ use std::str::FromStr;
 pub trait IO {
     fn read_line(&self) -> String;
     fn write_line(&mut self, line: &str);
-    fn flush(&mut self);
 }
 
 pub struct StdIO {
@@ -40,9 +39,6 @@ impl IO for StdIO {
         if self.to_stderr {
             eprintln!("Sent: {}", line);
         }
-    }
-
-    fn flush(&mut self) {
         self.stdout.lock().flush().expect("Failed to flush stdout");
     }
 }
@@ -142,7 +138,6 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
     fn send_receive_packets(&mut self, t: i64) -> Option<Vec<Packet>> {
         self.io.write_line(&format!("R {}", t));
-        self.io.flush();
 
         let p = self.read_single::<i64>();
         assert_ne!(p, -1, "ReceivePacket returned -1");
@@ -195,7 +190,6 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]> {
         self.io.write_line(&format!("Q {} {}", t, i + 1));
-        self.io.flush();
 
         let bitmap = self.read_single::<i64>();
         if bitmap == -1 {
@@ -214,7 +208,6 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
     fn send_finish(&mut self) {
         self.io.write_line("F");
-        self.io.flush();
     }
 }
 

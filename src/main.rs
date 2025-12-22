@@ -4,7 +4,7 @@ mod fallback;
 mod interactor;
 mod libb;
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{cmp::Reverse, collections::BinaryHeap, time::Instant};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
@@ -44,7 +44,7 @@ fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
 }
 
 fn main() {
-    time::start_clock(1.);
+    // let start = Instant::now();
     let io = StdIO::new(false);
     let mut interactor = IOInteractor::new(io);
     let graph = interactor.read_graph();
@@ -55,7 +55,6 @@ fn main() {
     let solver = GreedySolver::new(TRACKER_ENABLED);
     let fallback_solver = FallbackSolver;
 
-    eprintln!("start: {:.3}", time::elapsed_seconds());
     for task_i in 0..N_SUBTASK {
         let n = interactor.read_n();
         if is_fallback {
@@ -64,12 +63,11 @@ fn main() {
             solver.solve(n, &mut interactor, &input, &graph);
         }
 
-        if should_fallback(task_i + 1, time::elapsed_seconds()) {
-            eprintln!("switch to fallback solver: {:.3}", time::elapsed_seconds());
-            is_fallback = true;
-        }
+        // if should_fallback(task_i + 1, cur_time() - start_time) {
+        //     eprintln!("switch to fallback solver: {:.3}", cur_time() - start_time);
+        //     is_fallback = true;
+        // }
     }
-    eprintln!("elapsed: {:.3}", time::elapsed_seconds());
 }
 
 #[derive(Clone, Debug)]
