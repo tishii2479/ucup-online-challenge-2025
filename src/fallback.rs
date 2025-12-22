@@ -2,6 +2,7 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{core::*, interactor::*};
 
+#[allow(dead_code)]
 pub struct FallbackSolver;
 
 impl Solver for FallbackSolver {
