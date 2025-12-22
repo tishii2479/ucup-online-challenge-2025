@@ -286,7 +286,7 @@ fn process_packets(
 fn process_task(
     state: &mut State,
     core_id: usize,
-    t: i64,
+    cur_t: i64,
     interactor: &mut impl Interactor,
     input: &Input,
     graph: &Graph,
@@ -294,7 +294,7 @@ fn process_task(
     tracker: &mut Tracker,
 ) {
     let cur_task = state.next_tasks[core_id]
-        .as_mut()
+        .as_ref()
         .expect("cur_task should be Some");
 
     let node_id = graph.paths[cur_task.packet_type].path[cur_task.path_index];
@@ -304,7 +304,7 @@ fn process_task(
             if state.packet_special_cost[p.id].is_some() {
                 continue;
             }
-            let work = interactor.send_query_works(t, p.id).unwrap();
+            let work = interactor.send_query_works(cur_t, p.id).unwrap();
             let mut cost_sum = 0;
             for i in 0..N_SPECIAL {
                 if work[i] {
@@ -321,15 +321,21 @@ fn process_task(
         // TODO: insert task
     }
 
-    cur_task.last_chunk_min_i = None;
-
     // node_id = [7,11,13,15,18]は分割して処理する
     // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
     // - node_id = 11 -> 1つずつ処理する
+    let should_chunk_special_node = node_id == SPECIAL_NODE_ID
+        && should_chunk_special_node_task(cur_t, state, core_id, input, graph);
+
+    let cur_task = state.next_tasks[core_id]
+        .as_mut()
+        .expect("cur_task should be Some");
+    cur_task.last_chunk_min_i = None;
+
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         1
-    } else if node_id == SPECIAL_NODE_ID && state.received_packets.size() == state.packets.len() {
-        B / 2
+    } else if node_id == SPECIAL_NODE_ID && should_chunk_special_node {
+        (B / 4).max(4)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -361,7 +367,7 @@ fn process_task(
 
         process_packets(
             cur_task,
-            t,
+            cur_t,
             Some(&chunk_packets),
             core_id,
             node_id,
@@ -385,7 +391,7 @@ fn process_task(
     } else {
         process_packets(
             cur_task,
-            t,
+            cur_t,
             None,
             core_id,
             node_id,
@@ -403,6 +409,35 @@ fn process_task(
 
         cur_task.path_index += 1;
     }
+}
+
+fn should_chunk_special_node_task(
+    cur_t: i64,
+    state: &State,
+    core_id: usize,
+    input: &Input,
+    graph: &Graph,
+) -> bool {
+    if state.await_packets.size() > 0 {
+        return false;
+    }
+
+    let d0 = calculate_core_duration(state, core_id, input, graph);
+    let d0 = state
+        .duration_estimator
+        .estimate(&d0, state.next_tasks[core_id].as_ref().unwrap().packet_type);
+    for other_core_id in 0..input.n_cores {
+        if other_core_id == core_id {
+            continue;
+        }
+        let Some(other_task) = &state.next_tasks[other_core_id] else {
+            continue;
+        };
+        if cur_t <= other_task.next_t && other_task.next_t < cur_t + d0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// タスク完了時の処理
@@ -785,4 +820,11 @@ fn create_tasks(
             )
         })
         .collect()
+}
+
+impl Duration {
+    fn estimate(&self) -> i64 {
+        (self.lower_bound() as f64 + INIT_ALPHA * (self.upper_bound() - self.lower_bound()) as f64)
+            .round() as i64
+    }
 }
