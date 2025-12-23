@@ -10,14 +10,17 @@ use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, lib
 
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
+const FALLBACK_SEC: f64 = 10.;
 
 const B: usize = 16;
 const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
-
 const SPECIAL_NODE_CHUNK: usize = 4;
 
-const FALLBACK_SEC: f64 = 10.;
+const PERMUTE_TASK_THRESHOLD: usize = 6;
+const COMPLETE_TASK_TOP_K: usize = PERMUTE_TASK_THRESHOLD;
+const RECEIVE_TASK_TOP_K: usize = 16;
+const OPTIMIZE_TASK_ITERATION: usize = 5_000;
 
 impl Duration {
     fn estimate(&self) -> i64 {
@@ -438,7 +441,15 @@ fn complete_task(
 
     // 最も優先度の高いタスクを割り当てて開始する
     let max_batch_size = get_max_batch_size(Some(core_id), input, state);
-    let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, max_batch_size);
+    let mut tasks = create_tasks(
+        &state,
+        cur_t,
+        input,
+        graph,
+        &calculator,
+        max_batch_size,
+        COMPLETE_TASK_TOP_K,
+    );
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -603,7 +614,15 @@ fn receive_packet(
 
         // packet_typeごとにタスクを作成して、優先度を計算する
         let max_batch_size = get_max_batch_size(None, input, state);
-        let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, max_batch_size);
+        let mut tasks = create_tasks(
+            &state,
+            cur_t,
+            input,
+            graph,
+            &calculator,
+            max_batch_size,
+            RECEIVE_TASK_TOP_K,
+        );
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -643,6 +662,7 @@ fn create_tasks(
     graph: &Graph,
     calculator: &DurationCalculator,
     max_batch_size: usize,
+    top_k: usize,
 ) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
@@ -753,7 +773,7 @@ fn create_tasks(
                 last_chunk_min_i: None,
             }
         })
-        .take(6)
+        .take(top_k)
         .collect::<Vec<_>>();
 
     let batches = task_to_batches(&tasks, state, calculator);
@@ -840,8 +860,9 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
         next_ts: next_ts,
         batches: batches,
     };
+    ctx.best_timeout = ctx.evaluate_timeout(&order);
 
-    if order.len() <= 6 {
+    if order.len() <= PERMUTE_TASK_THRESHOLD {
         fn permute(order: &mut Vec<usize>, l: usize, ctx: &mut Context) {
             if l == order.len() {
                 let timeout = ctx.evaluate_timeout(order);
@@ -859,7 +880,21 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
         }
         permute(&mut order, 0, &mut ctx);
     } else {
-        for _ in 0..1_000 {}
+        let mut rnd = Rnd::new(123456789);
+        for _ in 0..OPTIMIZE_TASK_ITERATION {
+            let i = rnd.gen_index(order.len() - 1);
+            let j = i + 1;
+            order.swap(i, j);
+            let timeout = ctx.evaluate_timeout(&order);
+            if timeout <= ctx.best_timeout {
+                if timeout < ctx.best_timeout {
+                    ctx.best_order = order.clone();
+                }
+                ctx.best_timeout = timeout;
+            } else {
+                order.swap(i, j);
+            }
+        }
     }
 
     (ctx.best_timeout, ctx.best_order)
