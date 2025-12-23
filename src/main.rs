@@ -19,8 +19,8 @@ const SPECIAL_NODE_CHUNK: usize = 4;
 
 const PERMUTE_TASK_THRESHOLD: usize = 6;
 const COMPLETE_TASK_TOP_K: usize = PERMUTE_TASK_THRESHOLD;
-const RECEIVE_TASK_TOP_K: usize = 16;
-const OPTIMIZE_TASK_ITERATION: usize = 5_000;
+const RECEIVE_TASK_TOP_K: usize = 10;
+const OPTIMIZE_TASK_ITERATION: usize = 100;
 
 impl Duration {
     fn estimate(&self) -> i64 {
@@ -611,7 +611,10 @@ fn receive_packet(
         }
 
         state.last_received_t = cur_t;
+    }
 
+    let should_create_task = (0..input.n_cores).any(|core_id| state.next_tasks[core_id].is_none());
+    if should_create_task {
         // packet_typeごとにタスクを作成して、優先度を計算する
         let max_batch_size = get_max_batch_size(None, input, state);
         let mut tasks = create_tasks(
@@ -756,6 +759,7 @@ fn create_tasks(
     tasks.sort_unstable_by_key(|&(afford, _, _, _)| afford);
     let tasks = tasks
         .into_iter()
+        .take(top_k)
         .map(|(_, max_received_t, packet_type, ids)| {
             Task {
                 next_t: next_t(max_received_t, cur_t, input.cost_r),
@@ -773,7 +777,6 @@ fn create_tasks(
                 last_chunk_min_i: None,
             }
         })
-        .take(top_k)
         .collect::<Vec<_>>();
 
     let batches = task_to_batches(&tasks, state, calculator);
@@ -788,31 +791,6 @@ fn create_tasks(
         .into_iter()
         .map(|idx| tasks[idx].clone())
         .collect::<Vec<_>>()
-}
-
-fn task_to_batches(
-    tasks: &Vec<Task>,
-    state: &State,
-    calculator: &DurationCalculator,
-) -> Vec<Batch> {
-    let mut batches = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        let time_limits = task
-            .packets
-            .iter()
-            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
-            .collect();
-        let duration = calculator
-            .get_path_duration(task.packet_type, task.packets.len(), 0)
-            .estimate();
-        let next_t = task.next_t;
-        batches.push(Batch {
-            time_limits,
-            duration,
-            next_t,
-        });
-    }
-    batches
 }
 
 #[derive(Clone, Debug)]
@@ -880,10 +858,11 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
         }
         permute(&mut order, 0, &mut ctx);
     } else {
+        let n = order.len();
         let mut rnd = Rnd::new(123456789);
         for _ in 0..OPTIMIZE_TASK_ITERATION {
-            let i = rnd.gen_index(order.len() - 1);
-            let j = i + 1;
+            let i = rnd.gen_index(n - 1);
+            let j = (i + 1 + rnd.gen_index(2)).min(n - 1);
             order.swap(i, j);
             let timeout = ctx.evaluate_timeout(&order);
             if timeout <= ctx.best_timeout {
@@ -898,6 +877,31 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
     }
 
     (ctx.best_timeout, ctx.best_order)
+}
+
+fn task_to_batches(
+    tasks: &Vec<Task>,
+    state: &State,
+    calculator: &DurationCalculator,
+) -> Vec<Batch> {
+    let mut batches = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let time_limits = task
+            .packets
+            .iter()
+            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
+            .collect();
+        let duration = calculator
+            .get_path_duration(task.packet_type, task.packets.len(), 0)
+            .estimate();
+        let next_t = task.next_t;
+        batches.push(Batch {
+            time_limits,
+            duration,
+            next_t,
+        });
+    }
+    batches
 }
 
 #[cfg(test)]
