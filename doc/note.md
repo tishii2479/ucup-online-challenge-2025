@@ -304,6 +304,15 @@ evaluation:
 - 基本はmax-batch-sizeにする
 - あまりにtimeoutが多くなる時は区切る
 
+1. timelimitが小さい順にK個のpacketを取得するように、packet_typeごとにindexを求める
+2. packet_typeごとにバッチを分割する
+    - max_batch_size[packet_type]まで選ぶ
+    - 全てのパケットを受け取っていたら均等にする
+    - timeout>3くらいなら半分に分割する
+        - 無理なものは諦める
+    - indexを超えたら終了する
+3. max(packet.time_limit)が小さい順でtaskをソートする
+
 ## 終わった時に実際にタスクを渡す
 
 registered_task[core_id] = {

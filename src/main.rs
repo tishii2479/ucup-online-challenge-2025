@@ -29,8 +29,8 @@ impl Duration {
     }
 }
 
-fn get_max_batch_size(_core_id: Option<usize>, _input: &Input, _state: &State) -> usize {
-    B
+fn should_fallback(elapsed: f64) -> bool {
+    elapsed > FALLBACK_SEC
 }
 
 fn get_special_node_chunk_size(cur_task: &Task) -> usize {
@@ -83,10 +83,6 @@ fn should_chunk_special_node_task(
         }
     }
     false
-}
-
-fn should_fallback(elapsed: f64) -> bool {
-    elapsed > FALLBACK_SEC
 }
 
 fn main() {
@@ -440,24 +436,24 @@ fn complete_task(
     state.next_tasks[core_id] = None;
 
     // 最も優先度の高いタスクを割り当てて開始する
-    let max_batch_size = get_max_batch_size(Some(core_id), input, state);
-    let mut tasks = create_tasks(
-        &state,
-        cur_t,
-        input,
-        graph,
-        &calculator,
-        max_batch_size,
-        COMPLETE_TASK_TOP_K,
-    );
-    if let Some(task) = tasks.pop() {
-        // await_packetsから削除する
-        for &p in &task.packets {
-            state.await_packets.remove(p.id);
+    if state.await_packets.size() > 0 {
+        let mut tasks = create_tasks(
+            &state,
+            cur_t,
+            input,
+            graph,
+            &calculator,
+            COMPLETE_TASK_TOP_K,
+        );
+        if let Some(task) = tasks.pop() {
+            // await_packetsから削除する
+            for &p in &task.packets {
+                state.await_packets.remove(p.id);
+            }
+            q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
+            state.next_tasks[core_id] = Some(task);
+            return;
         }
-        q.push((Reverse(task.next_t), Event::ResumeCore(core_id)));
-        state.next_tasks[core_id] = Some(task);
-        return;
     }
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
@@ -613,19 +609,13 @@ fn receive_packet(
         state.last_received_t = cur_t;
     }
 
-    let should_create_task = (0..input.n_cores).any(|core_id| state.next_tasks[core_id].is_none());
-    if should_create_task {
+    let n_idle_cores = (0..input.n_cores)
+        .filter(|core_id| state.next_tasks[*core_id].is_none())
+        .count();
+    if n_idle_cores > 0 {
         // packet_typeごとにタスクを作成して、優先度を計算する
-        let max_batch_size = get_max_batch_size(None, input, state);
-        let mut tasks = create_tasks(
-            &state,
-            cur_t,
-            input,
-            graph,
-            &calculator,
-            max_batch_size,
-            RECEIVE_TASK_TOP_K,
-        );
+        let top_k = RECEIVE_TASK_TOP_K.max(n_idle_cores);
+        let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, top_k);
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -664,7 +654,6 @@ fn create_tasks(
     input: &Input,
     graph: &Graph,
     calculator: &DurationCalculator,
-    max_batch_size: usize,
     top_k: usize,
 ) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
@@ -731,9 +720,7 @@ fn create_tasks(
                 min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
-            if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
-                && cur_ids.len() >= MIN_BATCH_SIZE
-            {
+            if (changed_to_timeout_batch || cur_ids.len() >= B) && cur_ids.len() >= MIN_BATCH_SIZE {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 

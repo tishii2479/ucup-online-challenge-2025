@@ -1054,3 +1054,106 @@ fn _create_tasks(
         })
         .collect()
 }
+
+fn create_tasks(
+    state: &State,
+    cur_t: i64,
+    input: &Input,
+    graph: &Graph,
+    calculator: &DurationCalculator,
+    top_k: usize,
+) -> Vec<Task> {
+    fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
+        (received_t + cost_r).max(cur_t)
+    }
+    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
+    }
+
+    let mut packets = vec![];
+    for await_packet in state.await_packets.iter() {
+        packets.push(state.packets[*await_packet].as_ref().unwrap());
+    }
+    packets.sort_unstable_by_key(|&packet| {
+        let min_duration = calculator.get_path_duration(packet.packet_type, B, 0);
+        if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
+            // そもそも間に合わないパケットは優先度を一番下げる
+            INF
+        } else {
+            packet.time_limit
+        }
+    });
+
+    const K: usize = 100;
+    let mut packet_batches = vec![vec![]; N_PACKET_TYPE];
+    for c in 0.. {
+        let Some(p) = packets.pop() else {
+            break;
+        };
+        if c < K {
+            if packet_batches[p.packet_type].last().is_none() {
+                packet_batches[p.packet_type].push(vec![]);
+            }
+            let last_batch = packet_batches[p.packet_type].last().unwrap();
+            if last_batch.len() >= B {
+                packet_batches[p.packet_type].push(vec![]);
+            }
+            packet_batches[p.packet_type].last_mut().unwrap().push(p);
+        } else if let Some(last_batch) = packet_batches[p.packet_type].last_mut() {
+            if last_batch.len() < B {
+                last_batch.push(p);
+            }
+        }
+    }
+
+    let mut cands = vec![];
+    for packet_type in 0..N_PACKET_TYPE {
+        for batch in packet_batches[packet_type].iter() {
+            if batch.is_empty() {
+                continue;
+            }
+            let max_received_t = batch.iter().map(|p| p.received_t).max().unwrap();
+            let next_t = (max_received_t + input.cost_r).max(cur_t);
+            let time_limit_mean =
+                batch.iter().map(|p| p.time_limit).sum::<i64>() / batch.len() as i64;
+
+            cands.push((time_limit_mean, next_t, packet_type, batch));
+        }
+    }
+
+    cands.sort_unstable_by_key(|&(time_limit_mean, _, _, _)| time_limit_mean);
+    // dbg!(&cands);
+
+    let tasks = cands
+        .into_iter()
+        .take(top_k)
+        .map(|(_, next_t, packet_type, batch)| Task {
+            next_t,
+            packet_type,
+            path_index: 0,
+            is_chunked: false,
+            packets: batch
+                .iter()
+                .map(|&p| PacketStatus {
+                    id: p.i,
+                    is_advanced: false,
+                    is_switching_core: true,
+                })
+                .collect(),
+            last_chunk_min_i: None,
+        })
+        .collect::<Vec<_>>();
+
+    let batches = task_to_batches(&tasks, state, calculator);
+    let next_ts: Vec<i64> = (0..input.n_cores)
+        .map(|core_id| cur_t + estimate_core_duration(state, core_id, input, graph).estimate())
+        .collect();
+
+    let (_, mut best_order) = optimize_task(next_ts, batches);
+
+    best_order.reverse(); // stackとして扱うため、逆順にする
+    best_order
+        .into_iter()
+        .map(|idx| tasks[idx].clone())
+        .collect::<Vec<_>>()
+}
