@@ -16,6 +16,14 @@ const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
 const ALPHA: f64 = 0.8;
 
+fn get_max_batch_size(core_id: usize, input: &Input, state: &State) -> Option<usize> {
+    if core_id < input.n_cores / 4 && state.received_packets.size() < state.packets.len() {
+        Some(4)
+    } else {
+        None
+    }
+}
+
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     const MIN_AWAIT_INTERVAL: i64 = 40;
     const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
@@ -29,9 +37,44 @@ fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     }
 }
 
+fn should_chunk_special_node_task(
+    node_id: usize,
+    cur_task: &Task,
+    state: &State,
+    core_id: usize,
+    input: &Input,
+    graph: &Graph,
+) -> bool {
+    if state.await_packets.size() > 0 {
+        return false;
+    }
+
+    let dt = if node_id == SPECIAL_NODE_ID {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+            + cur_task
+                .packets
+                .iter()
+                .map(|p| state.packet_special_cost[p.id].unwrap())
+                .sum::<i64>()
+    } else {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+    };
+
+    for other_core_id in 0..input.n_cores {
+        if other_core_id == core_id {
+            continue;
+        }
+        let other_core_end_task =
+            estimate_core_duration(state, other_core_id, input, graph).estimate();
+        if other_core_end_task < dt {
+            return true;
+        }
+    }
+    false
+}
+
 #[allow(unused)]
 fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
-    const FALLBACK_THRESHOLD: f64 = 7.5;
     false
 }
 
@@ -176,42 +219,6 @@ impl Solver for GreedySolver {
             tracker.dump_task_logs();
         }
     }
-}
-
-fn should_chunk_special_node_task(
-    node_id: usize,
-    cur_task: &Task,
-    state: &State,
-    core_id: usize,
-    input: &Input,
-    graph: &Graph,
-) -> bool {
-    if state.await_packets.size() > 0 {
-        return false;
-    }
-
-    let dt = if node_id == SPECIAL_NODE_ID {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-            + cur_task
-                .packets
-                .iter()
-                .map(|p| state.packet_special_cost[p.id].unwrap())
-                .sum::<i64>()
-    } else {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-    };
-
-    for other_core_id in 0..input.n_cores {
-        if other_core_id == core_id {
-            continue;
-        }
-        let other_core_end_task =
-            estimate_core_duration(state, other_core_id, input, graph).estimate();
-        if other_core_end_task < dt {
-            return true;
-        }
-    }
-    false
 }
 
 /// パケットを処理する
@@ -415,7 +422,8 @@ fn complete_task(
     state.next_tasks[core_id] = None;
 
     // 最も優先度の高いタスクを割り当てて開始する
-    let mut tasks = create_tasks(&state, cur_t, input, &calculator);
+    let max_batch_size = get_max_batch_size(core_id, input, state);
+    let mut tasks = create_tasks(&state, cur_t, input, &calculator, max_batch_size);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -581,7 +589,7 @@ fn receive_packet(
         state.last_received_t = cur_t;
 
         // packet_typeごとにタスクを作成して、優先度を計算する
-        let mut tasks = create_tasks(&state, cur_t, input, &calculator);
+        let mut tasks = create_tasks(&state, cur_t, input, &calculator, None);
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -619,6 +627,7 @@ fn create_tasks(
     cur_t: i64,
     input: &Input,
     calculator: &DurationCalculator,
+    max_batch_size: Option<usize>,
 ) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
@@ -669,6 +678,8 @@ fn create_tasks(
         let mut min_time_limit = INF;
         let mut max_received_t = -INF;
 
+        let max_batch_size = max_batch_size.unwrap_or(MAX_BATCH_SIZE[packet_type]);
+
         for &packet in &packets[packet_type] {
             let new_duration = calculator
                 .get_path_duration(packet.packet_type, cur_ids.len() + 1, 0)
@@ -684,7 +695,7 @@ fn create_tasks(
                 min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
-            if changed_to_timeout_batch || cur_ids.len() >= MAX_BATCH_SIZE[packet_type] {
+            if changed_to_timeout_batch || cur_ids.len() >= max_batch_size {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
