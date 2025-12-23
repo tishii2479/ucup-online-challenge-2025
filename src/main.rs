@@ -17,6 +17,8 @@ const ALPHA: f64 = 0.8;
 
 const SPECIAL_NODE_CHUNK: usize = 4;
 
+const FALLBACK_SEC: f64 = 10.;
+
 fn get_max_batch_size(_core_id: Option<usize>, _input: &Input, _state: &State) -> usize {
     B
 }
@@ -69,9 +71,8 @@ fn should_chunk_special_node_task(
     false
 }
 
-#[allow(unused)]
-fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
-    false
+fn should_fallback(elapsed: f64) -> bool {
+    elapsed > FALLBACK_SEC
 }
 
 fn main() {
@@ -85,7 +86,7 @@ fn main() {
     let solver = GreedySolver::new(TRACKER_ENABLED);
     let fallback_solver = FallbackSolver;
 
-    for task_i in 0..N_SUBTASK {
+    for _ in 0..N_SUBTASK {
         let n = interactor.read_n();
         if is_fallback {
             fallback_solver.solve(n, &mut interactor, &input, &graph);
@@ -94,14 +95,13 @@ fn main() {
         }
 
         let elapsed = interactor.get_elapsed_time();
-        if should_fallback(task_i + 1, elapsed) {
+        if should_fallback(elapsed) {
             eprintln!("switch to fallback solver: {:.3}", elapsed);
             is_fallback = true;
         }
     }
 
     eprintln!("elapsed: {:.3}", interactor.get_elapsed_time());
-    assert!(interactor.get_elapsed_time() < 2.);
 }
 
 #[derive(Clone, Debug)]

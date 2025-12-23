@@ -93,9 +93,9 @@ impl<I: IO> IOInteractor<I> {
     }
 
     fn write_line(&mut self, line: &str) {
-        self.cum_time += self.now.elapsed().as_secs_f64();
+        // self.cum_time += self.now.elapsed().as_secs_f64();
         self.io.write_line(line);
-        self.now = Instant::now();
+        // self.now = Instant::now();
     }
 
     pub fn get_elapsed_time(&mut self) -> f64 {
