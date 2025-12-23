@@ -3,10 +3,11 @@ mod core;
 mod fallback;
 mod interactor;
 mod libb;
+mod sw;
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
-use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
+use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*, sw::Perf};
 
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
@@ -15,14 +16,10 @@ const B: usize = 16;
 const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
 
-fn get_max_batch_size(core_id: Option<usize>, input: &Input, state: &State) -> usize {
-    if state.received_packets.size() < state.packets.len() {
-        B
-    } else if state.await_packets.size() > 0 {
-        B
-    } else {
-        B
-    }
+const SPECIAL_NODE_CHUNK: usize = 4;
+
+fn get_max_batch_size(_core_id: Option<usize>, _input: &Input, _state: &State) -> usize {
+    B
 }
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
@@ -328,7 +325,7 @@ fn process_task(
     } else if node_id == SPECIAL_NODE_ID
         && should_chunk_special_node_task(node_id, cur_task, state, core_id, input, graph)
     {
-        ((cur_task.packets.len() + 1) / 2).max(1)
+        ((cur_task.packets.len() + SPECIAL_NODE_CHUNK - 1) / SPECIAL_NODE_CHUNK).max(1)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -450,7 +447,7 @@ fn complete_task(
             .collect::<Vec<usize>>();
 
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
-        other_cores.sort_by_key(|&id| {
+        other_cores.sort_unstable_by_key(|&id| {
             Reverse(cur_t + estimate_core_duration(state, id, input, graph).estimate())
         });
 
@@ -631,6 +628,12 @@ fn create_tasks(
     calculator: &DurationCalculator,
     max_batch_size: usize,
 ) -> Vec<Task> {
+    let sw = Perf::start_singleton("name:create_tasks");
+
+    // ビームサーチでタスクを作成する
+    // packet_typeごとにtimeoutしないようにバッチを作る
+    // packet_typeごとにB*2個までのタスクを作成する
+
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -665,7 +668,7 @@ fn create_tasks(
     for packet_type in 0..N_PACKET_TYPE {
         let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
         // パケットを締め切り順にソートする
-        packets[packet_type].sort_by_key(|&packet| {
+        packets[packet_type].sort_unstable_by_key(|&packet| {
             if is_timeouted(&packet, cur_t, input.cost_r, &min_duration) {
                 // そもそも間に合わないパケットは優先度を一番下げる
                 INF
@@ -680,7 +683,7 @@ fn create_tasks(
         let mut min_time_limit = INF;
         let mut max_received_t = -INF;
 
-        for &packet in &packets[packet_type] {
+        for &packet in packets[packet_type].iter() {
             let new_duration = calculator
                 .get_path_duration(packet.packet_type, cur_ids.len() + 1, 0)
                 .estimate();
@@ -695,7 +698,9 @@ fn create_tasks(
                 min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
-            if changed_to_timeout_batch || cur_ids.len() >= max_batch_size {
+            if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+                && cur_ids.len() >= MIN_BATCH_SIZE
+            {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
@@ -718,8 +723,8 @@ fn create_tasks(
     }
 
     // 優先度が低い順にソートする（後ろほど優先度が高い、stackとして扱う）
-    tasks.sort_by_key(|&(afford, _, _, _)| Reverse(afford));
-    tasks
+    tasks.sort_unstable_by_key(|&(afford, _, _, _)| Reverse(afford));
+    let ret = tasks
         .into_iter()
         .map(|(_, max_received_t, packet_type, ids)| {
             Task {
@@ -738,7 +743,9 @@ fn create_tasks(
                 last_chunk_min_i: None,
             }
         })
-        .collect()
+        .collect();
+    sw.stop();
+    ret
 }
 
 impl Duration {

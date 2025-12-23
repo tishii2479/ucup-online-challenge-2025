@@ -193,10 +193,11 @@ impl Display for Measure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?} ± {:?} ({} samples)",
+            "{:?} ± {:?} ({} samples, sum: {:?})",
             self.mean(),
             self.std_dev(),
-            self.cnt
+            self.cnt,
+            Duration::from_secs_f64(self.sum),
         )
     }
 }
