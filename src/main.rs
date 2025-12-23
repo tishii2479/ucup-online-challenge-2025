@@ -328,7 +328,7 @@ fn process_task(
     } else if node_id == SPECIAL_NODE_ID
         && should_chunk_special_node_task(node_id, cur_task, state, core_id, input, graph)
     {
-        ((cur_task.packets.len() + 1) / 4).max(1)
+        ((cur_task.packets.len() + 1) / 2).max(1)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
