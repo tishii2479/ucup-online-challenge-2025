@@ -6,7 +6,7 @@ mod libb;
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
-use crate::{calculator::*, core::*, interactor::*, libb::*};
+use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
@@ -52,6 +52,7 @@ fn main() {
     eprintln!("input: {:?}", input);
 
     let solver = GreedySolver::new(TRACKER_ENABLED);
+    let solver = FallbackSolver;
 
     for _task_i in 0..N_SUBTASK {
         let n = interactor.read_n();

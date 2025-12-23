@@ -32,6 +32,9 @@ impl Solver for FallbackSolver {
         let mut special_costs = vec![None; n];
         let mut core_id = 0;
         for group in groups {
+            if group.is_empty() {
+                continue;
+            }
             let p_type = group[0].packet_type;
             for i in (0..group.len()).step_by(MAX_BATCH_SIZES[p_type]) {
                 let batch = &group[i..(i + MAX_BATCH_SIZES[p_type]).min(group.len())];
