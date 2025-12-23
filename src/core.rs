@@ -1,5 +1,6 @@
 use crate::interactor::Interactor;
 
+#[allow(dead_code)]
 pub const TIME_LIMIT: f64 = 9.8;
 
 pub const N_SUBTASK: usize = 5;

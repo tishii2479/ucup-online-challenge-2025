@@ -4,7 +4,7 @@ mod fallback;
 mod interactor;
 mod libb;
 
-use std::{cmp::Reverse, collections::BinaryHeap, time::Instant};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
@@ -15,8 +15,6 @@ const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
 const ALPHA: f64 = 0.8;
-
-const FALLBACK_THRESHOLD: f64 = 7.5;
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     const MIN_AWAIT_INTERVAL: i64 = 40;
@@ -31,13 +29,14 @@ fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     }
 }
 
-fn should_fallback(_completed_subtask: usize, elapsed: f64) -> bool {
-    // const FALLBACK_DURATION: f64 = 0.3;
-    elapsed >= FALLBACK_THRESHOLD
+#[allow(unused)]
+fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
+    const FALLBACK_THRESHOLD: f64 = 7.5;
+    false
 }
 
 fn main() {
-    let start = Instant::now();
+    let start = std::time::Instant::now();
     let io = StdIO::new(false);
     let mut interactor = IOInteractor::new(io);
     let graph = interactor.read_graph();
