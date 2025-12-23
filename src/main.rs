@@ -322,13 +322,13 @@ fn process_task(
 
     // node_id = [7,11,13,15,18]は分割して処理する
     // - node_id = SPECIAL_NODE_ID -> 小さく分けて処理する
-    // - node_id = 11 -> 1つずつ処理する
+    // - node_id = CHUNK_NODES -> 1つずつ処理する
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         1
     } else if node_id == SPECIAL_NODE_ID
         && should_chunk_special_node_task(node_id, cur_task, state, core_id, input, graph)
     {
-        (cur_task.packets.len() + 1) / 2
+        ((cur_task.packets.len() + 1) / 4).max(1)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
