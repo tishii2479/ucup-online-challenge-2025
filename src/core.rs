@@ -89,7 +89,7 @@ pub struct TaskLog {
     pub path_index: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Duration {
     pub fixed: i64,
     pub special_node_count: i64,

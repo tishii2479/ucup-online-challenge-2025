@@ -12,15 +12,16 @@ const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 
 const B: usize = 16;
-const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
 const ALPHA: f64 = 0.8;
 
-fn get_max_batch_size(core_id: usize, input: &Input, state: &State) -> Option<usize> {
-    if core_id < input.n_cores / 4 && state.received_packets.size() < state.packets.len() {
-        Some(4)
+fn get_max_batch_size(core_id: Option<usize>, input: &Input, state: &State) -> usize {
+    if state.received_packets.size() < state.packets.len() {
+        B
+    } else if state.await_packets.size() > 0 {
+        B
     } else {
-        None
+        B
     }
 }
 
@@ -422,7 +423,7 @@ fn complete_task(
     state.next_tasks[core_id] = None;
 
     // 最も優先度の高いタスクを割り当てて開始する
-    let max_batch_size = get_max_batch_size(core_id, input, state);
+    let max_batch_size = get_max_batch_size(Some(core_id), input, state);
     let mut tasks = create_tasks(&state, cur_t, input, &calculator, max_batch_size);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
@@ -466,6 +467,9 @@ fn complete_task(
             if task2.path_index == graph.paths[task2.packet_type].path.len() {
                 continue;
             }
+
+            // 他のコアから挿入してきても、task2が遂行できるなら先にそれを優先する
+            // 忙しいものから先に試す
 
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
             state.next_tasks[other_core_id] = Some(task1);
@@ -589,7 +593,8 @@ fn receive_packet(
         state.last_received_t = cur_t;
 
         // packet_typeごとにタスクを作成して、優先度を計算する
-        let mut tasks = create_tasks(&state, cur_t, input, &calculator, None);
+        let max_batch_size = get_max_batch_size(None, input, state);
+        let mut tasks = create_tasks(&state, cur_t, input, &calculator, max_batch_size);
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -627,7 +632,7 @@ fn create_tasks(
     cur_t: i64,
     input: &Input,
     calculator: &DurationCalculator,
-    max_batch_size: Option<usize>,
+    max_batch_size: usize,
 ) -> Vec<Task> {
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
@@ -677,8 +682,6 @@ fn create_tasks(
         // timeoutしていないパケットでだけ集計する
         let mut min_time_limit = INF;
         let mut max_received_t = -INF;
-
-        let max_batch_size = max_batch_size.unwrap_or(MAX_BATCH_SIZE[packet_type]);
 
         for &packet in &packets[packet_type] {
             let new_duration = calculator

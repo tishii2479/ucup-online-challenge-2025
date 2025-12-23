@@ -1,4 +1,4 @@
-use crate::{MAX_BATCH_SIZE, State, Task, core::*};
+use crate::{State, Task, core::*};
 
 pub struct DurationCalculator {
     /// path_duration[packet_type][batch_size][from_path_index]
@@ -7,15 +7,15 @@ pub struct DurationCalculator {
 
 impl DurationCalculator {
     pub fn new(input: &Input, graph: &Graph) -> Self {
-        let max_batch_size = MAX_BATCH_SIZE.iter().max().unwrap() + 5;
+        const MAX_BATCH_SIZE: usize = 128;
         let max_path_length = graph.paths.iter().map(|p| p.path.len()).max().unwrap();
         let mut path_durations =
             vec![
-                vec![vec![Duration::new(0, 0); max_path_length + 1]; max_batch_size + 1];
+                vec![vec![Duration::new(0, 0); max_path_length + 1]; MAX_BATCH_SIZE + 1];
                 N_PACKET_TYPE
             ];
         for packet_type in 0..N_PACKET_TYPE {
-            for batch_size in 1..=max_batch_size {
+            for batch_size in 1..=MAX_BATCH_SIZE {
                 for from_path_index in 0..=graph.paths[packet_type].path.len() {
                     path_durations[packet_type][batch_size][from_path_index] =
                         DurationCalculator::calculate_path_duration(
@@ -38,7 +38,7 @@ impl DurationCalculator {
         batch_size: usize,
         from_path_index: usize,
     ) -> Duration {
-        self.path_durations[packet_type][batch_size][from_path_index].clone()
+        self.path_durations[packet_type][batch_size][from_path_index]
     }
 
     /// packet_typeをbatch_sizeで処理する場合の所要時間を見積もる
