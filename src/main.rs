@@ -753,7 +753,7 @@ fn create_tasks(
                 last_chunk_min_i: None,
             }
         })
-        .take(5)
+        .take(6)
         .collect::<Vec<_>>();
 
     let batches = task_to_batches(&tasks, state, calculator);
@@ -763,8 +763,7 @@ fn create_tasks(
 
     let (_, mut best_order) = optimize_task(next_ts, batches);
 
-    // stackとして扱うため、逆順にする
-    best_order.reverse();
+    best_order.reverse(); // stackとして扱うため、逆順にする
     best_order
         .into_iter()
         .map(|idx| tasks[idx].clone())
@@ -834,24 +833,7 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
             timeouts
         }
     }
-    fn permute(order: &mut Vec<usize>, l: usize, ctx: &mut Context) {
-        if l == order.len() {
-            let timeout = ctx.evaluate_timeout(order);
-            if timeout < ctx.best_timeout {
-                ctx.best_timeout = timeout;
-                ctx.best_order = order.clone();
-            }
-            return;
-        }
-        for i in l..order.len() {
-            order.swap(l, i);
-            permute(order, l + 1, ctx);
-            order.swap(l, i);
-        }
-    }
-
     let mut order = (0..batches.len()).collect::<Vec<_>>();
-
     let mut ctx = Context {
         best_order: order.clone(),
         best_timeout: INF,
@@ -859,13 +841,26 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
         batches: batches,
     };
 
-    eprint!("timeout: {} -> ", ctx.evaluate_timeout(&order));
-    permute(&mut order, 0, &mut ctx);
-    eprintln!(
-        "{} {:?}",
-        ctx.evaluate_timeout(&ctx.best_order),
-        &ctx.best_order
-    );
+    if order.len() <= 6 {
+        fn permute(order: &mut Vec<usize>, l: usize, ctx: &mut Context) {
+            if l == order.len() {
+                let timeout = ctx.evaluate_timeout(order);
+                if timeout < ctx.best_timeout {
+                    ctx.best_timeout = timeout;
+                    ctx.best_order = order.clone();
+                }
+                return;
+            }
+            for i in l..order.len() {
+                order.swap(l, i);
+                permute(order, l + 1, ctx);
+                order.swap(l, i);
+            }
+        }
+        permute(&mut order, 0, &mut ctx);
+    } else {
+        for _ in 0..1_000 {}
+    }
 
     (ctx.best_timeout, ctx.best_order)
 }
