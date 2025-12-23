@@ -270,3 +270,49 @@ for i in 0..L {
 return states[0];
 ```
 
+## 課題
+切り替えのタスクの選択基準
+- 持って来れるタスクがあるのに、最も長いタスクのコアを選択してしまっている
+- 持って来れるタスクにすると、長いタスクを持ってくるタイミングを失う
+
+バッチの作り方
+- 小さいと効率が悪い
+- 大きいとtimeoutがたくさん発生する、切り替えのロスが大きくなりがち
+    - コアごとに傾斜をつける（高効率コア、高周期コア）
+    - コアが余っているうちは細かく分ける
+    - 終盤まではコアごとに傾斜をつけて一部で高効率、高周期でtimeoutの考慮
+    - 終盤は全て高周期
+- コアが多いと多少スタートが遅くなる
+- 最適な順序・分割基準になっていない
+    - コアへの割り当て時刻を考慮していない
+    - timeout数の最小化になっていない
+    - 小さいビームサーチが良さそう
+- packet_typeごとにmax_batch_sizeを変える
+
+## optimize-task
+
+input:
+- next_t: Vec<i64>,
+- batch: { packet_type, [time_limit] },
+output:
+- order: Vec<usize>
+evaluation:
+- n_timeout
+
+## create-task
+
+- 基本はmax-batch-sizeにする
+- あまりにtimeoutが多くなる時は区切る
+
+## 終わった時に実際にタスクを渡す
+
+registered_task[core_id] = {
+    Receive(i64), // start_t
+    Give(Vec<usize>), // [ids]
+}
+- process-taskの時に分け与える
+
+## タスクを持ってくる前に、終わる前に終わらせられるタスクを先にやる
+
+- 分けられることが決まったら、Receiveに間に合う限りはタスクをこなす
+- complete-taskで新しいタスクをもらうときに確認をする

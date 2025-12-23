@@ -8,7 +8,7 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
-const TRACKER_ENABLED: bool = true;
+const TRACKER_ENABLED: bool = false;
 const INF: i64 = 1_000_000_000_000;
 
 const B: usize = 16;
@@ -19,17 +19,28 @@ const SPECIAL_NODE_CHUNK: usize = 4;
 
 const FALLBACK_SEC: f64 = 10.;
 
+impl Duration {
+    fn estimate(&self) -> i64 {
+        (self.lower_bound() as f64 + ALPHA * (self.upper_bound() - self.lower_bound()) as f64)
+            .round() as i64
+    }
+}
+
 fn get_max_batch_size(_core_id: Option<usize>, _input: &Input, _state: &State) -> usize {
     B
+}
+
+fn get_special_node_chunk_size(cur_task: &Task) -> usize {
+    ((cur_task.packets.len() + SPECIAL_NODE_CHUNK - 1) / SPECIAL_NODE_CHUNK).max(1)
 }
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     const MIN_AWAIT_INTERVAL: i64 = 40;
     const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
 
-    let in_progress = cur_t <= state.last_received_t + LAST_RECEIVED_T_THRESHOLD
+    let is_receiving = cur_t <= state.last_received_t + LAST_RECEIVED_T_THRESHOLD
         && state.received_packets.size() > 0;
-    if in_progress {
+    if is_receiving {
         input.cost_r
     } else {
         MIN_AWAIT_INTERVAL.max(input.cost_r)
@@ -331,7 +342,7 @@ fn process_task(
     } else if node_id == SPECIAL_NODE_ID
         && should_chunk_special_node_task(node_id, cur_task, state, core_id, input, graph)
     {
-        ((cur_task.packets.len() + SPECIAL_NODE_CHUNK - 1) / SPECIAL_NODE_CHUNK).max(1)
+        get_special_node_chunk_size(cur_task)
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
@@ -443,14 +454,18 @@ fn complete_task(
         let mut other_cores = (0..input.n_cores)
             .filter(|&id| id != core_id)
             .filter(|&id| state.next_tasks[id].is_some())
-            .collect::<Vec<usize>>();
+            .map(|id| {
+                (
+                    id,
+                    estimate_core_duration(state, id, input, graph).estimate(),
+                )
+            })
+            .collect::<Vec<_>>();
 
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
-        other_cores.sort_unstable_by_key(|&id| {
-            Reverse(cur_t + estimate_core_duration(state, id, input, graph).estimate())
-        });
+        other_cores.sort_unstable_by_key(|&(_, duration)| Reverse(cur_t + duration));
 
-        for other_core_id in other_cores {
+        for (other_core_id, _) in other_cores {
             let Some(task) = &state.next_tasks[other_core_id] else {
                 continue;
             };
@@ -619,210 +634,6 @@ fn receive_packet(
     }
 }
 
-/// ビームサーチでタスクを作成する
-fn _create_tasks(
-    state: &State,
-    cur_t: i64,
-    input: &Input,
-    graph: &Graph,
-    calculator: &DurationCalculator,
-    max_batch_size: usize,
-) -> Vec<Task> {
-    fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
-        (received_t + cost_r).max(cur_t)
-    }
-    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
-    }
-
-    #[derive(Clone, Debug)]
-    struct Op {
-        packet_type: usize,
-        si: usize,
-        ti: usize,
-        max_received_t: i64,
-    }
-    #[derive(Clone, Debug)]
-    struct BeamState {
-        n_packet: usize,
-        n_timeout: i64,
-        order: Vec<Op>,
-        ptr: [usize; N_PACKET_TYPE], // ptr[packet_type]
-        complete_t: Vec<i64>,        // complete_t[core_id]
-    }
-    impl BeamState {
-        fn new(order_len: usize, complete_t: Vec<i64>) -> Self {
-            Self {
-                n_packet: 0,
-                n_timeout: 0,
-                order: Vec::with_capacity(order_len),
-                ptr: [0; N_PACKET_TYPE],
-                complete_t,
-            }
-        }
-    }
-
-    const L: usize = 5;
-    const W: usize = 10;
-    let mut packets = vec![vec![]; N_PACKET_TYPE];
-    for await_packet in state.await_packets.iter() {
-        let packet = state.packets[*await_packet].as_ref().unwrap();
-        packets[packet.packet_type].push(packet);
-    }
-    for packet_type in 0..N_PACKET_TYPE {
-        // パケットを締め切り順にソートする
-        packets[packet_type].sort_unstable_by_key(|&packet| packet.time_limit);
-        packets[packet_type].truncate(2 * B);
-    }
-
-    let mut complete_t = Vec::with_capacity(input.n_cores);
-    for core_i in 0..input.n_cores {
-        let core_end_t = cur_t + estimate_core_duration(state, core_i, input, graph).estimate();
-        complete_t.push(core_end_t);
-    }
-    let mut states = vec![BeamState::new(L, complete_t)];
-    let mut set = std::collections::HashSet::new();
-    for _ in 0..L {
-        let mut next_states = vec![];
-        for state in states.iter() {
-            let core_id = state
-                .complete_t
-                .iter()
-                .enumerate()
-                .min_by_key(|&(_, &t)| t)
-                .unwrap()
-                .0;
-            let last_complete_t = state.complete_t[core_id];
-            for packet_type in 0..N_PACKET_TYPE {
-                let mut s = state.clone();
-                let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
-
-                let mut min_time_limit = INF;
-                let mut max_received_t = -INF;
-                let mut max_received_t_actual = -INF;
-
-                let si = s.ptr[packet_type];
-                if si >= packets[packet_type].len() {
-                    continue;
-                }
-
-                let mut ti = si;
-                while ti < packets[packet_type].len() {
-                    let packet = &packets[packet_type][ti];
-                    let s = ti - si + 1;
-                    let new_duration = calculator.get_path_duration(packet_type, s, 0).estimate();
-                    let is_timeouted_packet =
-                        is_timeouted(packet, last_complete_t, input.cost_r, &min_duration);
-                    let changed_to_timeout_batch = if is_timeouted_packet {
-                        // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
-                        // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
-                        let next_t = next_t(max_received_t, last_complete_t, input.cost_r);
-                        min_time_limit < next_t + new_duration
-                    } else {
-                        let next_t = next_t(
-                            packet.received_t.max(max_received_t),
-                            last_complete_t,
-                            input.cost_r,
-                        );
-                        min_time_limit.min(packet.time_limit) < next_t + new_duration
-                    };
-
-                    if (changed_to_timeout_batch || s >= max_batch_size) && s >= MIN_BATCH_SIZE {
-                        break;
-                    }
-
-                    if !is_timeouted_packet {
-                        min_time_limit = min_time_limit.min(packet.time_limit);
-                        max_received_t = max_received_t.max(packet.received_t);
-                    }
-                    max_received_t_actual = max_received_t_actual.max(packet.received_t);
-                    ti += 1;
-                }
-
-                // [si, ti)までをバッチにする
-                let next_t = next_t(max_received_t_actual, last_complete_t, input.cost_r);
-                s.complete_t[core_id] = next_t
-                    + calculator
-                        .get_path_duration(packet_type, ti - si, 0)
-                        .estimate();
-                s.n_packet += ti - si;
-                s.ptr[packet_type] = ti;
-                s.order.push(Op {
-                    packet_type,
-                    si,
-                    ti,
-                    max_received_t: max_received_t_actual,
-                });
-
-                // 他のpacket_typeのptrを更新する
-                let next_complete_t = s.complete_t.iter().max().cloned().unwrap();
-                s.n_timeout = 0;
-                for i in 0..N_PACKET_TYPE {
-                    for p in 0..packets[i].len() {
-                        let other_packet = &packets[i][p];
-                        let other_min_duration = calculator.get_path_duration(i, MIN_BATCH_SIZE, 0);
-                        if is_timeouted(
-                            other_packet,
-                            next_complete_t,
-                            input.cost_r,
-                            &other_min_duration,
-                        ) {
-                            s.n_timeout += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                next_states.push(s);
-            }
-        }
-
-        if next_states.is_empty() {
-            break;
-        }
-
-        next_states.sort_unstable_by_key(|s| (s.n_timeout, Reverse(s.n_packet)));
-        set.clear();
-
-        states = next_states
-            .into_iter()
-            .filter(|s| set.insert(s.complete_t.clone()))
-            .take(W)
-            .collect();
-    }
-
-    let s = states[0].clone();
-    eprintln!(
-        "created tasks: n_packet={:4}, n_timeout={:4}, all-packets: {:4}",
-        s.n_packet,
-        s.n_timeout,
-        state.await_packets.size()
-    );
-    s.order
-        .into_iter()
-        .map(|op| {
-            Task {
-                next_t: next_t(op.max_received_t, cur_t, input.cost_r),
-                packet_type: op.packet_type,
-                path_index: 0,
-                is_chunked: false,
-                last_chunk_min_i: None,
-                packets: (op.si..op.ti)
-                    .map(|i| {
-                        let packet = packets[op.packet_type][i];
-                        PacketStatus {
-                            id: packet.i,
-                            is_advanced: false,
-                            is_switching_core: true, // 最初はcore=0から必ずコアを移動する
-                        }
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
-
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(
@@ -833,9 +644,6 @@ fn create_tasks(
     calculator: &DurationCalculator,
     max_batch_size: usize,
 ) -> Vec<Task> {
-    // use crate::sw::Perf;
-    // let sw = Perf::start_singleton("name:create_tasks");
-
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
         let packet = state.packets[*await_packet].as_ref().unwrap();
@@ -946,13 +754,5 @@ fn create_tasks(
             }
         })
         .collect();
-    // sw.stop();
     ret
-}
-
-impl Duration {
-    fn estimate(&self) -> i64 {
-        (self.lower_bound() as f64 + ALPHA * (self.upper_bound() - self.lower_bound()) as f64)
-            .round() as i64
-    }
 }
