@@ -3,11 +3,10 @@ mod core;
 mod fallback;
 mod interactor;
 mod libb;
-mod sw;
 
 use std::{cmp::Reverse, collections::BinaryHeap};
 
-use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*, sw::Perf};
+use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
@@ -43,28 +42,27 @@ fn should_chunk_special_node_task(
     input: &Input,
     graph: &Graph,
 ) -> bool {
+    if node_id != SPECIAL_NODE_ID {
+        return false;
+    }
     if state.await_packets.size() > 0 {
         return false;
     }
 
-    let dt = if node_id == SPECIAL_NODE_ID {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-            + cur_task
-                .packets
-                .iter()
-                .map(|p| state.packet_special_cost[p.id].unwrap())
-                .sum::<i64>()
-    } else {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-    };
+    let dt = graph.nodes[node_id].costs[cur_task.packets.len()]
+        + cur_task
+            .packets
+            .iter()
+            .map(|p| state.packet_special_cost[p.id].unwrap())
+            .sum::<i64>();
 
     for other_core_id in 0..input.n_cores {
         if other_core_id == core_id {
             continue;
         }
-        let other_core_end_task =
+        let other_core_duration =
             estimate_core_duration(state, other_core_id, input, graph).estimate();
-        if other_core_end_task < dt {
+        if other_core_duration < dt {
             return true;
         }
     }
@@ -77,7 +75,6 @@ fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
 }
 
 fn main() {
-    let start = std::time::Instant::now();
     let io = StdIO::new(false);
     let mut interactor = IOInteractor::new(io);
     let graph = interactor.read_graph();
@@ -96,14 +93,15 @@ fn main() {
             solver.solve(n, &mut interactor, &input, &graph);
         }
 
-        let elapsed = start.elapsed().as_secs_f64();
+        let elapsed = interactor.get_elapsed_time();
         if should_fallback(task_i + 1, elapsed) {
             eprintln!("switch to fallback solver: {:.3}", elapsed);
             is_fallback = true;
         }
     }
 
-    eprintln!("elapsed: {:.3}", start.elapsed().as_secs_f64());
+    eprintln!("elapsed: {:.3}", interactor.get_elapsed_time());
+    assert!(interactor.get_elapsed_time() < 2.);
 }
 
 #[derive(Clone, Debug)]
@@ -175,7 +173,15 @@ impl Solver for GreedySolver {
         while let Some((t, event)) = q.pop() {
             match event {
                 Event::ReceivePacket => {
-                    receive_packet(&mut state, t.0, interactor, input, &calculator, &mut q);
+                    receive_packet(
+                        &mut state,
+                        t.0,
+                        interactor,
+                        input,
+                        graph,
+                        &calculator,
+                        &mut q,
+                    );
                 }
                 Event::ResumeCore(core_id) => {
                     // タスクが完了したか確認する
@@ -421,7 +427,7 @@ fn complete_task(
 
     // 最も優先度の高いタスクを割り当てて開始する
     let max_batch_size = get_max_batch_size(Some(core_id), input, state);
-    let mut tasks = create_tasks(&state, cur_t, input, &calculator, max_batch_size);
+    let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, max_batch_size);
     if let Some(task) = tasks.pop() {
         // await_packetsから削除する
         for &p in &task.packets {
@@ -434,13 +440,6 @@ fn complete_task(
 
     // パケットが残っていなければ、他のコアから分割してタスクをもらってくる
     if input.n_cores > 1 {
-        // idle_tasksがあるならそのままもらってくる
-        for other_core_id in 0..input.n_cores {
-            if other_core_id == core_id {
-                continue;
-            }
-        }
-
         let mut other_cores = (0..input.n_cores)
             .filter(|&id| id != core_id)
             .filter(|&id| state.next_tasks[id].is_some())
@@ -572,6 +571,7 @@ fn receive_packet(
     cur_t: i64,
     interactor: &mut impl Interactor,
     input: &Input,
+    graph: &Graph,
     calculator: &DurationCalculator,
     q: &mut EventQueue,
 ) {
@@ -588,7 +588,7 @@ fn receive_packet(
 
         // packet_typeごとにタスクを作成して、優先度を計算する
         let max_batch_size = get_max_batch_size(None, input, state);
-        let mut tasks = create_tasks(&state, cur_t, input, &calculator, max_batch_size);
+        let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, max_batch_size);
 
         // 空いているコアがある限り優先度順にタスクを割り当てる
         for core_id in 0..input.n_cores {
@@ -619,20 +619,222 @@ fn receive_packet(
     }
 }
 
+/// ビームサーチでタスクを作成する
+fn _create_tasks(
+    state: &State,
+    cur_t: i64,
+    input: &Input,
+    graph: &Graph,
+    calculator: &DurationCalculator,
+    max_batch_size: usize,
+) -> Vec<Task> {
+    fn next_t(received_t: i64, cur_t: i64, cost_r: i64) -> i64 {
+        (received_t + cost_r).max(cur_t)
+    }
+    fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
+    }
+
+    #[derive(Clone, Debug)]
+    struct Op {
+        packet_type: usize,
+        si: usize,
+        ti: usize,
+        max_received_t: i64,
+    }
+    #[derive(Clone, Debug)]
+    struct BeamState {
+        n_packet: usize,
+        n_timeout: i64,
+        order: Vec<Op>,
+        ptr: [usize; N_PACKET_TYPE], // ptr[packet_type]
+        complete_t: Vec<i64>,        // complete_t[core_id]
+    }
+    impl BeamState {
+        fn new(order_len: usize, complete_t: Vec<i64>) -> Self {
+            Self {
+                n_packet: 0,
+                n_timeout: 0,
+                order: Vec::with_capacity(order_len),
+                ptr: [0; N_PACKET_TYPE],
+                complete_t,
+            }
+        }
+    }
+
+    const L: usize = 5;
+    const W: usize = 10;
+    let mut packets = vec![vec![]; N_PACKET_TYPE];
+    for await_packet in state.await_packets.iter() {
+        let packet = state.packets[*await_packet].as_ref().unwrap();
+        packets[packet.packet_type].push(packet);
+    }
+    for packet_type in 0..N_PACKET_TYPE {
+        // パケットを締め切り順にソートする
+        packets[packet_type].sort_unstable_by_key(|&packet| packet.time_limit);
+        packets[packet_type].truncate(2 * B);
+    }
+
+    let mut complete_t = Vec::with_capacity(input.n_cores);
+    for core_i in 0..input.n_cores {
+        let core_end_t = cur_t + estimate_core_duration(state, core_i, input, graph).estimate();
+        complete_t.push(core_end_t);
+    }
+    let mut states = vec![BeamState::new(L, complete_t)];
+    let mut set = std::collections::HashSet::new();
+    for _ in 0..L {
+        let mut next_states = vec![];
+        for state in states.iter() {
+            let core_id = state
+                .complete_t
+                .iter()
+                .enumerate()
+                .min_by_key(|&(_, &t)| t)
+                .unwrap()
+                .0;
+            let last_complete_t = state.complete_t[core_id];
+            for packet_type in 0..N_PACKET_TYPE {
+                let mut s = state.clone();
+                let min_duration = calculator.get_path_duration(packet_type, MIN_BATCH_SIZE, 0);
+
+                let mut min_time_limit = INF;
+                let mut max_received_t = -INF;
+                let mut max_received_t_actual = -INF;
+
+                let si = s.ptr[packet_type];
+                if si >= packets[packet_type].len() {
+                    continue;
+                }
+
+                let mut ti = si;
+                while ti < packets[packet_type].len() {
+                    let packet = &packets[packet_type][ti];
+                    let s = ti - si + 1;
+                    let new_duration = calculator.get_path_duration(packet_type, s, 0).estimate();
+                    let is_timeouted_packet =
+                        is_timeouted(packet, last_complete_t, input.cost_r, &min_duration);
+                    let changed_to_timeout_batch = if is_timeouted_packet {
+                        // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
+                        // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
+                        let next_t = next_t(max_received_t, last_complete_t, input.cost_r);
+                        min_time_limit < next_t + new_duration
+                    } else {
+                        let next_t = next_t(
+                            packet.received_t.max(max_received_t),
+                            last_complete_t,
+                            input.cost_r,
+                        );
+                        min_time_limit.min(packet.time_limit) < next_t + new_duration
+                    };
+
+                    if (changed_to_timeout_batch || s >= max_batch_size) && s >= MIN_BATCH_SIZE {
+                        break;
+                    }
+
+                    if !is_timeouted_packet {
+                        min_time_limit = min_time_limit.min(packet.time_limit);
+                        max_received_t = max_received_t.max(packet.received_t);
+                    }
+                    max_received_t_actual = max_received_t_actual.max(packet.received_t);
+                    ti += 1;
+                }
+
+                // [si, ti)までをバッチにする
+                let next_t = next_t(max_received_t_actual, last_complete_t, input.cost_r);
+                s.complete_t[core_id] = next_t
+                    + calculator
+                        .get_path_duration(packet_type, ti - si, 0)
+                        .estimate();
+                s.n_packet += ti - si;
+                s.ptr[packet_type] = ti;
+                s.order.push(Op {
+                    packet_type,
+                    si,
+                    ti,
+                    max_received_t: max_received_t_actual,
+                });
+
+                // 他のpacket_typeのptrを更新する
+                let next_complete_t = s.complete_t.iter().max().cloned().unwrap();
+                s.n_timeout = 0;
+                for i in 0..N_PACKET_TYPE {
+                    for p in 0..packets[i].len() {
+                        let other_packet = &packets[i][p];
+                        let other_min_duration = calculator.get_path_duration(i, MIN_BATCH_SIZE, 0);
+                        if is_timeouted(
+                            other_packet,
+                            next_complete_t,
+                            input.cost_r,
+                            &other_min_duration,
+                        ) {
+                            s.n_timeout += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                next_states.push(s);
+            }
+        }
+
+        if next_states.is_empty() {
+            break;
+        }
+
+        next_states.sort_unstable_by_key(|s| (s.n_timeout, Reverse(s.n_packet)));
+        set.clear();
+
+        states = next_states
+            .into_iter()
+            .filter(|s| set.insert(s.complete_t.clone()))
+            .take(W)
+            .collect();
+    }
+
+    let s = states[0].clone();
+    eprintln!(
+        "created tasks: n_packet={:4}, n_timeout={:4}, all-packets: {:4}",
+        s.n_packet,
+        s.n_timeout,
+        state.await_packets.size()
+    );
+    s.order
+        .into_iter()
+        .map(|op| {
+            Task {
+                next_t: next_t(op.max_received_t, cur_t, input.cost_r),
+                packet_type: op.packet_type,
+                path_index: 0,
+                is_chunked: false,
+                last_chunk_min_i: None,
+                packets: (op.si..op.ti)
+                    .map(|i| {
+                        let packet = packets[op.packet_type][i];
+                        PacketStatus {
+                            id: packet.i,
+                            is_advanced: false,
+                            is_switching_core: true, // 最初はcore=0から必ずコアを移動する
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
 /// タスクを作成する
 /// 後ろほど優先度が高い
 fn create_tasks(
     state: &State,
     cur_t: i64,
     input: &Input,
+    _graph: &Graph,
     calculator: &DurationCalculator,
     max_batch_size: usize,
 ) -> Vec<Task> {
-    let sw = Perf::start_singleton("name:create_tasks");
-
-    // ビームサーチでタスクを作成する
-    // packet_typeごとにtimeoutしないようにバッチを作る
-    // packet_typeごとにB*2個までのタスクを作成する
+    // use crate::sw::Perf;
+    // let sw = Perf::start_singleton("name:create_tasks");
 
     let mut packets = vec![vec![]; N_PACKET_TYPE];
     for await_packet in state.await_packets.iter() {
@@ -744,7 +946,7 @@ fn create_tasks(
             }
         })
         .collect();
-    sw.stop();
+    // sw.stop();
     ret
 }
 

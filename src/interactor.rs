@@ -2,6 +2,7 @@ use crate::core::*;
 use std::io::BufRead;
 use std::io::Write;
 use std::str::FromStr;
+use std::time::Instant;
 
 pub trait IO {
     fn read_line(&self) -> String;
@@ -62,11 +63,18 @@ pub trait Interactor {
 
 pub struct IOInteractor<I: IO> {
     io: I,
+    cum_time: f64,
+    now: Instant,
 }
 
 impl<I: IO> IOInteractor<I> {
     pub fn new(io: I) -> Self {
-        Self { io }
+        let now = Instant::now();
+        Self {
+            io,
+            cum_time: 0.,
+            now,
+        }
     }
 
     fn read_single<T>(&mut self) -> T
@@ -74,7 +82,24 @@ impl<I: IO> IOInteractor<I> {
         T: FromStr,
         <T as FromStr>::Err: std::fmt::Debug,
     {
-        self.io.read_line().parse::<T>().unwrap()
+        self.read_line().parse::<T>().unwrap()
+    }
+
+    fn read_line(&mut self) -> String {
+        self.cum_time += self.now.elapsed().as_secs_f64();
+        let line = self.io.read_line();
+        self.now = Instant::now();
+        line
+    }
+
+    fn write_line(&mut self, line: &str) {
+        self.cum_time += self.now.elapsed().as_secs_f64();
+        self.io.write_line(line);
+        self.now = Instant::now();
+    }
+
+    pub fn get_elapsed_time(&mut self) -> f64 {
+        self.cum_time + self.now.elapsed().as_secs_f64()
     }
 }
 
@@ -84,9 +109,10 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn read_graph(&mut self) -> Graph {
+        self.cum_time += self.now.elapsed().as_secs_f64();
         let mut paths = Vec::with_capacity(N_PACKET_TYPE);
         for _ in 0..N_PACKET_TYPE {
-            let line = self.io.read_line();
+            let line = self.read_line();
             let mut parts = line.split_whitespace();
             let l = parts.next().unwrap().parse::<usize>().unwrap();
             let path = parts
@@ -98,7 +124,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
 
         let mut nodes = Vec::with_capacity(N_NODE);
         for _ in 0..N_NODE {
-            let line = self.io.read_line();
+            let line = self.read_line();
             let mut parts = line.split_whitespace();
             let b = parts.next().unwrap().parse::<usize>().unwrap();
             let mut costs = parts
@@ -109,12 +135,14 @@ impl<I: IO> Interactor for IOInteractor<I> {
             nodes.push(Node { costs });
         }
 
-        let line = self.io.read_line();
+        let line = self.read_line();
         let special_costs = line
             .split_whitespace()
             .take(N_SPECIAL)
             .map(|x| x.parse::<i64>().unwrap())
             .collect::<Vec<_>>();
+
+        self.now = Instant::now();
 
         Graph {
             paths,
@@ -124,7 +152,9 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn read_input(&mut self) -> Input {
-        let line = self.io.read_line();
+        self.cum_time += self.now.elapsed().as_secs_f64();
+        let line = self.read_line();
+        self.now = Instant::now();
         let mut parts = line.split_whitespace();
         let num_cores = parts.next().unwrap().parse::<usize>().unwrap();
         let cost_switch = parts.next().unwrap().parse::<i64>().unwrap();
@@ -137,7 +167,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn send_receive_packets(&mut self, t: i64) -> Option<Vec<Packet>> {
-        self.io.write_line(&format!("R {}", t));
+        self.write_line(&format!("R {}", t));
 
         let p = self.read_single::<i64>();
         assert_ne!(p, -1, "ReceivePacket returned -1");
@@ -148,7 +178,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
         }
         let mut packets = Vec::with_capacity(p);
         for _ in 0..p {
-            let line = self.io.read_line();
+            let line = self.read_line();
             let mut parts = line.split_whitespace();
             let i = parts.next().unwrap().parse::<usize>().unwrap() - 1;
             let arrive = parts.next().unwrap().parse::<i64>().unwrap();
@@ -174,7 +204,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
         s: usize,
         packets: Vec<usize>,
     ) {
-        self.io.write_line(&format!(
+        self.write_line(&format!(
             "E {} {} {} {} {}",
             t,
             core_id + 1,
@@ -189,7 +219,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn send_query_works(&mut self, t: i64, i: usize) -> Option<[bool; N_SPECIAL]> {
-        self.io.write_line(&format!("Q {} {}", t, i + 1));
+        self.write_line(&format!("Q {} {}", t, i + 1));
 
         let bitmap = self.read_single::<i64>();
         if bitmap == -1 {
@@ -207,7 +237,7 @@ impl<I: IO> Interactor for IOInteractor<I> {
     }
 
     fn send_finish(&mut self) {
-        self.io.write_line("F");
+        self.write_line("F");
     }
 }
 

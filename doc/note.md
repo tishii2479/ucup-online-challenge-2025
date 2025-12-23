@@ -1,4 +1,4 @@
-## TODO:
+<!-- ## TODO: -->
 - 入力分布の特定
     - 順位表を使って分布を探る（assert）
 - 可視化
@@ -234,4 +234,39 @@ not-hunked:
 chunkedは今まで通り
 last-chunkは処理した時に更新
 
+
+```rust
+input: next_ts: Vec<i64>, await_packets: Vec<Vec<Packet>>;
+score: n_timeout
+
+next_ts;
+await_packets[packet_type].sort_by(p.time_limit);
+await_packets[packet_type].truncate(B*2);
+
+struct BeamState {
+    n_timeout: i64,
+    packet_types: Vec<usize>,
+    ptr: Vec<usize>, // ptr[packet_type]
+}
+
+let mut states = vec![];
+
+// O(L*W*PACKET_TYPE*2*B+W*PACKET_TYPE*log(W*PACKET_TYPE))
+// O(5*W*7*2*B + W*7*log(W*7))
+// O(1120W + W*7*(log W + log 7))
+// O(11200 + 70 * 8)
+// 最大でもW=10くらい？
+for i in 0..L {
+    for s in states {
+        for t in 0..N_PACKET_TYPE {
+            // timeoutしないようにtのバッチを作成する
+        }
+    }
+
+    next_states.sort();
+    s = next_states.take(W);
+}
+
+return states[0];
+```
 
