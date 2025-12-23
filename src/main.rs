@@ -8,7 +8,7 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
-const TRACKER_ENABLED: bool = false;
+const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 
 const B: usize = 16;
@@ -640,7 +640,7 @@ fn create_tasks(
     state: &State,
     cur_t: i64,
     input: &Input,
-    _graph: &Graph,
+    graph: &Graph,
     calculator: &DurationCalculator,
     max_batch_size: usize,
 ) -> Vec<Task> {
@@ -733,8 +733,8 @@ fn create_tasks(
     }
 
     // 優先度が低い順にソートする（後ろほど優先度が高い、stackとして扱う）
-    tasks.sort_unstable_by_key(|&(afford, _, _, _)| Reverse(afford));
-    let ret = tasks
+    tasks.sort_unstable_by_key(|&(afford, _, _, _)| afford);
+    let tasks = tasks
         .into_iter()
         .map(|(_, max_received_t, packet_type, ids)| {
             Task {
@@ -753,6 +753,147 @@ fn create_tasks(
                 last_chunk_min_i: None,
             }
         })
+        .take(5)
+        .collect::<Vec<_>>();
+
+    let batches = task_to_batches(&tasks, state, calculator);
+    let next_ts: Vec<i64> = (0..input.n_cores)
+        .map(|core_id| cur_t + estimate_core_duration(state, core_id, input, graph).estimate())
         .collect();
-    ret
+
+    let (_, mut best_order) = optimize_task(next_ts, batches);
+
+    // stackとして扱うため、逆順にする
+    best_order.reverse();
+    best_order
+        .into_iter()
+        .map(|idx| tasks[idx].clone())
+        .collect::<Vec<_>>()
+}
+
+fn task_to_batches(
+    tasks: &Vec<Task>,
+    state: &State,
+    calculator: &DurationCalculator,
+) -> Vec<Batch> {
+    let mut batches = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let time_limits = task
+            .packets
+            .iter()
+            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
+            .collect();
+        let duration = calculator
+            .get_path_duration(task.packet_type, task.packets.len(), 0)
+            .estimate();
+        let next_t = task.next_t;
+        batches.push(Batch {
+            time_limits,
+            duration,
+            next_t,
+        });
+    }
+    batches
+}
+
+#[derive(Clone, Debug)]
+struct Batch {
+    time_limits: Vec<i64>,
+    duration: i64,
+    next_t: i64,
+}
+
+fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
+    struct Context {
+        best_order: Vec<usize>,
+        best_timeout: i64,
+        next_ts: Vec<i64>,
+        batches: Vec<Batch>,
+    }
+    impl Context {
+        fn evaluate_timeout(&self, order: &Vec<usize>) -> i64 {
+            let mut timeouts = 0;
+            let mut cur_ts = self.next_ts.clone();
+            for &idx in order {
+                let core_id = cur_ts
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|&(_, &t)| t)
+                    .unwrap()
+                    .0;
+                let batch = &self.batches[idx];
+                let start_t = cur_ts[core_id].max(batch.next_t);
+                let finish_t = start_t + batch.duration;
+                for &tl in &batch.time_limits {
+                    if finish_t > tl {
+                        timeouts += 1;
+                    }
+                }
+                cur_ts[core_id] = finish_t;
+            }
+            timeouts
+        }
+    }
+    fn permute(order: &mut Vec<usize>, l: usize, ctx: &mut Context) {
+        if l == order.len() {
+            let timeout = ctx.evaluate_timeout(order);
+            if timeout < ctx.best_timeout {
+                ctx.best_timeout = timeout;
+                ctx.best_order = order.clone();
+            }
+            return;
+        }
+        for i in l..order.len() {
+            order.swap(l, i);
+            permute(order, l + 1, ctx);
+            order.swap(l, i);
+        }
+    }
+
+    let mut order = (0..batches.len()).collect::<Vec<_>>();
+
+    let mut ctx = Context {
+        best_order: order.clone(),
+        best_timeout: INF,
+        next_ts: next_ts,
+        batches: batches,
+    };
+
+    eprint!("timeout: {} -> ", ctx.evaluate_timeout(&order));
+    permute(&mut order, 0, &mut ctx);
+    eprintln!(
+        "{} {:?}",
+        ctx.evaluate_timeout(&ctx.best_order),
+        &ctx.best_order
+    );
+
+    (ctx.best_timeout, ctx.best_order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl Batch {
+        fn new(time_limits: Vec<i64>, duration: i64, next_t: i64) -> Self {
+            Self {
+                time_limits,
+                duration,
+                next_t,
+            }
+        }
+    }
+
+    #[test]
+    fn test_optimize_task() {
+        let next_ts = vec![10, 20];
+        let batches = vec![
+            Batch::new(vec![50, 65], 5, 20),
+            Batch::new(vec![20], 10, 10),
+            Batch::new(vec![35, 45], 20, 20),
+            Batch::new(vec![30, 55], 10, 10),
+        ];
+        let order = optimize_task(next_ts, batches);
+        println!("order: {:?}", order);
+    }
 }
