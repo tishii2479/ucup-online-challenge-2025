@@ -61,6 +61,8 @@ fn main() {
             is_fallback = true;
         }
     }
+
+    eprintln!("elapsed: {:.3}", start.elapsed().as_secs_f64());
 }
 
 #[derive(Clone, Debug)]
@@ -177,7 +179,6 @@ impl Solver for GreedySolver {
 }
 
 fn should_chunk_special_node_task(
-    cur_t: i64,
     node_id: usize,
     cur_task: &Task,
     state: &State,
@@ -204,10 +205,9 @@ fn should_chunk_special_node_task(
         if other_core_id == core_id {
             continue;
         }
-        let Some(other_task) = &state.next_tasks[other_core_id] else {
-            continue;
-        };
-        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
+        let other_core_end_task =
+            estimate_core_duration(state, other_core_id, input, graph).estimate();
+        if other_core_end_task < dt {
             return true;
         }
     }
@@ -318,9 +318,9 @@ fn process_task(
     let desired_batch_size = if CHUNK_NODES.contains(&node_id) {
         1
     } else if node_id == SPECIAL_NODE_ID
-        && should_chunk_special_node_task(cur_t, node_id, cur_task, state, core_id, input, graph)
+        && should_chunk_special_node_task(node_id, cur_task, state, core_id, input, graph)
     {
-        (B / 4).max(4)
+        (cur_task.packets.len() + 1) / 2
     } else {
         graph.nodes[node_id].costs.len() - 1
     };
