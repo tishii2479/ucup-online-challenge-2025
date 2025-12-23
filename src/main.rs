@@ -4,7 +4,7 @@ mod fallback;
 mod interactor;
 mod libb;
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{cmp::Reverse, collections::BinaryHeap, time::Instant};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
@@ -16,7 +16,7 @@ const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B, B, B, B, B, B, B];
 const MIN_BATCH_SIZE: usize = 1;
 const ALPHA: f64 = 0.8;
 
-const FALLBACK_DURATION: f64 = 0.3;
+const FALLBACK_THRESHOLD: f64 = 7.5;
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     const MIN_AWAIT_INTERVAL: i64 = 40;
@@ -31,32 +31,36 @@ fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
     }
 }
 
-#[allow(dead_code)]
-fn should_fallback(completed_subtask: usize, elapsed: f64) -> bool {
-    let average_duration = elapsed / (completed_subtask as f64);
-    let expected_duration = average_duration * N_SUBTASK as f64;
-    if expected_duration < TIME_LIMIT {
-        return false;
-    }
-    let remain_subtask = N_SUBTASK - completed_subtask;
-    let min_duration_without_fallback =
-        elapsed + average_duration + (remain_subtask - 1) as f64 * FALLBACK_DURATION;
-    min_duration_without_fallback > TIME_LIMIT
+fn should_fallback(_completed_subtask: usize, elapsed: f64) -> bool {
+    // const FALLBACK_DURATION: f64 = 0.3;
+    elapsed >= FALLBACK_THRESHOLD
 }
 
 fn main() {
+    let start = Instant::now();
     let io = StdIO::new(false);
     let mut interactor = IOInteractor::new(io);
     let graph = interactor.read_graph();
     let input = interactor.read_input();
     eprintln!("input: {:?}", input);
 
+    let mut is_fallback = false;
     let solver = GreedySolver::new(TRACKER_ENABLED);
-    let solver = FallbackSolver;
+    let fallback_solver = FallbackSolver;
 
-    for _task_i in 0..N_SUBTASK {
+    for task_i in 0..N_SUBTASK {
         let n = interactor.read_n();
-        solver.solve(n, &mut interactor, &input, &graph);
+        if is_fallback {
+            fallback_solver.solve(n, &mut interactor, &input, &graph);
+        } else {
+            solver.solve(n, &mut interactor, &input, &graph);
+        }
+
+        let elapsed = start.elapsed().as_secs_f64();
+        if should_fallback(task_i + 1, elapsed) {
+            eprintln!("switch to fallback solver: {:.3}", elapsed);
+            is_fallback = true;
+        }
     }
 }
 
@@ -171,6 +175,44 @@ impl Solver for GreedySolver {
             tracker.dump_task_logs();
         }
     }
+}
+
+fn should_chunk_special_node_task(
+    cur_t: i64,
+    node_id: usize,
+    cur_task: &Task,
+    state: &State,
+    core_id: usize,
+    input: &Input,
+    graph: &Graph,
+) -> bool {
+    if state.await_packets.size() > 0 {
+        return false;
+    }
+
+    let dt = if node_id == SPECIAL_NODE_ID {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+            + cur_task
+                .packets
+                .iter()
+                .map(|p| state.packet_special_cost[p.id].unwrap())
+                .sum::<i64>()
+    } else {
+        graph.nodes[node_id].costs[cur_task.packets.len()]
+    };
+
+    for other_core_id in 0..input.n_cores {
+        if other_core_id == core_id {
+            continue;
+        }
+        let Some(other_task) = &state.next_tasks[other_core_id] else {
+            continue;
+        };
+        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
+            return true;
+        }
+    }
+    false
 }
 
 /// パケットを処理する
@@ -358,44 +400,6 @@ fn process_task(
 
         cur_task.path_index += 1;
     }
-}
-
-fn should_chunk_special_node_task(
-    cur_t: i64,
-    node_id: usize,
-    cur_task: &Task,
-    state: &State,
-    core_id: usize,
-    input: &Input,
-    graph: &Graph,
-) -> bool {
-    if state.await_packets.size() > 0 {
-        return false;
-    }
-
-    let dt = if node_id == SPECIAL_NODE_ID {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-            + cur_task
-                .packets
-                .iter()
-                .map(|p| state.packet_special_cost[p.id].unwrap())
-                .sum::<i64>()
-    } else {
-        graph.nodes[node_id].costs[cur_task.packets.len()]
-    };
-
-    for other_core_id in 0..input.n_cores {
-        if other_core_id == core_id {
-            continue;
-        }
-        let Some(other_task) = &state.next_tasks[other_core_id] else {
-            continue;
-        };
-        if cur_t <= other_task.next_t && other_task.next_t < cur_t + dt {
-            return true;
-        }
-    }
-    false
 }
 
 /// タスク完了時の処理
