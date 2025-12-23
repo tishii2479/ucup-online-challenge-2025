@@ -12,7 +12,7 @@ const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 
 const B: usize = 16;
-const MIN_BATCH_SIZE: usize = 1;
+const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
 
 fn get_max_batch_size(core_id: Option<usize>, input: &Input, state: &State) -> usize {
@@ -467,9 +467,6 @@ fn complete_task(
             if task2.path_index == graph.paths[task2.packet_type].path.len() {
                 continue;
             }
-
-            // 他のコアから挿入してきても、task2が遂行できるなら先にそれを優先する
-            // 忙しいものから先に試す
 
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
             state.next_tasks[other_core_id] = Some(task1);
