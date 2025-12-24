@@ -19,6 +19,8 @@ const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
 const SPECIAL_NODE_CHUNK: usize = 4;
 
+const INSERT_E_TIMEOUT_THRESHOLD: f64 = 0.5;
+
 const PERMUTE_TASK_THRESHOLD: usize = 6;
 const COMPLETE_TASK_TOP_K: usize = PERMUTE_TASK_THRESHOLD;
 const RECEIVE_TASK_TOP_K: usize = 10;
@@ -480,19 +482,19 @@ fn complete_task(
         return;
     }
 
-    for other_core_id in 0..input.n_cores {
-        if other_core_id == core_id {
-            continue;
-        }
-        if let Some(mut task) = state.idle_tasks[other_core_id].take() {
-            q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
-            task.packets
-                .iter_mut()
-                .for_each(|p| p.is_switching_core = true);
-            state.next_tasks[core_id] = Some(task);
-            return;
-        }
-    }
+    // for other_core_id in 0..input.n_cores {
+    //     if other_core_id == core_id {
+    //         continue;
+    //     }
+    //     if let Some(mut task) = state.idle_tasks[other_core_id].take() {
+    //         q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
+    //         task.packets
+    //             .iter_mut()
+    //             .for_each(|p| p.is_switching_core = true);
+    //         state.next_tasks[core_id] = Some(task);
+    //         return;
+    //     }
+    // }
 
     // 最も優先度の高いタスクを割り当てて開始する
     if state.await_packets.size() > 0 {
@@ -694,26 +696,35 @@ fn insert_interrupt_tasks(
             .sum::<f64>()
     }
 
-    const K: usize = 3;
-
     let mut start_ts = (0..input.n_cores)
         .map(|core_id| cur_t + estimate_core_duration(state, core_id, input, graph).estimate())
         .collect::<Vec<_>>();
+
+    const K: usize = 3;
 
     for _ in 0..K {
         let Some(insert_task) = tasks.pop() else {
             break;
         };
-        let min_start_t = *start_ts.iter().min().unwrap();
-        let insert_task_duration =
+
+        let Some((min_core_id, min_start_t)) = (0..input.n_cores)
+            .filter_map(|core_id| {
+                if state.idle_tasks[core_id].is_some() {
+                    None
+                } else {
+                    Some((core_id, start_ts[core_id]))
+                }
+            })
+            .min()
+        else {
+            break;
+        };
+
+        let old_insert_task_start_t = min_start_t.max(insert_task.next_t);
+        let old_insert_task_duration =
             estimate_task_duration(&insert_task, input, graph, &state.packet_special_cost);
-        let cur_e_timeout = calc_e_timeout(
-            &insert_task,
-            min_start_t.max(insert_task.next_t),
-            state,
-            input,
-            graph,
-        );
+        let old_insert_e_timeout =
+            calc_e_timeout(&insert_task, old_insert_task_start_t, state, input, graph);
 
         let mut cands = vec![];
         for core_id in 0..input.n_cores {
@@ -723,20 +734,34 @@ fn insert_interrupt_tasks(
             let Some(cur_task) = &state.next_tasks[core_id] else {
                 continue;
             };
-            let cur_task_e_timeout =
+            let old_cur_task_e_timeout =
                 calc_e_timeout(&cur_task, cur_task.next_t, state, input, graph);
-            let cur_e_timeout = cur_e_timeout + cur_task_e_timeout;
+            let old_cur_task_duration =
+                estimate_task_duration(&cur_task, input, graph, &state.packet_special_cost);
+            let old_e_timeout_sum = old_insert_e_timeout + old_cur_task_e_timeout;
 
-            let insert_task_start_t = cur_task.next_t.max(insert_task.next_t);
-            let cur_task_resume_t = insert_task_start_t + insert_task_duration.estimate();
+            let new_insert_task_start_t = cur_task.next_t.max(insert_task.next_t);
             let new_insert_task_e_timeout =
-                calc_e_timeout(&insert_task, insert_task_start_t, state, input, graph);
-            let new_cur_task_e_timeout =
-                calc_e_timeout(&cur_task, cur_task_resume_t, state, input, graph);
-            let new_e_timeout = new_insert_task_e_timeout + new_cur_task_e_timeout;
+                calc_e_timeout(&insert_task, new_insert_task_start_t, state, input, graph);
 
-            if new_e_timeout < cur_e_timeout {
-                cands.push((core_id, new_e_timeout));
+            // TODO: cur-taskの所要時間が最も短いコアを探す
+            // min_start_tを使用する
+            let new_cur_task_resume_t =
+                new_insert_task_start_t + old_insert_task_duration.estimate();
+            let new_cur_task_e_timeout =
+                calc_e_timeout(&cur_task, new_cur_task_resume_t, state, input, graph);
+            let new_e_timeout_sum = new_insert_task_e_timeout + new_cur_task_e_timeout;
+
+            if new_e_timeout_sum + INSERT_E_TIMEOUT_THRESHOLD < old_e_timeout_sum {
+                cands.push((
+                    core_id,
+                    new_e_timeout_sum,
+                    old_e_timeout_sum,
+                    old_insert_task_start_t,
+                    new_cur_task_resume_t,
+                    old_insert_task_duration,
+                    old_cur_task_duration,
+                ));
             }
         }
 
@@ -744,19 +769,52 @@ fn insert_interrupt_tasks(
             continue;
         }
 
-        let (insert_core_id, e_timeout) = cands
+        let (
+            insert_core_id,
+            new_e_timeout_sum,
+            cur_e_timeout_sum,
+            cur_insert_task_start_t,
+            cur_task_resume_t,
+            insert_task_duration,
+            cur_task_duration,
+        ) = cands
             .into_iter()
-            .min_by(|&(_, e1), &(_, e2)| e1.partial_cmp(&e2).unwrap())
+            .min_by(|&e1, &e2| e1.1.partial_cmp(&e2.1).unwrap())
             .unwrap();
 
+        // eprintln!(
+        //     "insert task: core_id={:3}, e_timeout={:.6} -> {:.6} ({:.6})",
+        //     insert_core_id,
+        //     cur_e_timeout_sum,
+        //     new_e_timeout_sum,
+        //     new_e_timeout_sum - cur_e_timeout_sum
+        // );
+        // eprintln!(
+        //     "insert-task: [{:6}, {:6}], cur-task: [{:6}, {:6}]",
+        //     cur_insert_task_start_t,
+        //     cur_insert_task_start_t + insert_task_duration.estimate(),
+        //     cur_task_resume_t,
+        //     cur_task_resume_t + cur_task_duration.estimate()
+        // );
+
         let cur_task = state.next_tasks[insert_core_id].take().unwrap();
-        eprintln!(
-            "insert task: core_id={:3}, e_timeout={:.6} -> {:.6} ({:.6})",
-            insert_core_id,
-            cur_e_timeout,
-            e_timeout,
-            e_timeout - cur_e_timeout
-        );
+
+        let mut cur_tls = cur_task
+            .packets
+            .iter()
+            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
+            .collect::<Vec<_>>();
+        cur_tls.sort_unstable();
+        let mut insert_tls = insert_task
+            .packets
+            .iter()
+            .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
+            .collect::<Vec<_>>();
+        insert_tls.sort_unstable();
+        // eprintln!(" cur_task tls: {:?}", cur_tls);
+        // eprintln!(" insert_task tls: {:?}", insert_tls);
+        // dbg!(&cur_task);
+        // dbg!(&insert_task);
 
         let insert_task_start_t = cur_task.next_t.max(insert_task.next_t);
 

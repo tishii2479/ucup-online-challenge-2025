@@ -89,6 +89,14 @@ pub fn estimate_core_duration(
             &state.packet_special_cost,
         ));
     }
+    if let Some(idle_task) = &state.idle_tasks[core_id] {
+        ret.add(&estimate_task_duration(
+            idle_task,
+            input,
+            graph,
+            &state.packet_special_cost,
+        ));
+    }
     ret
 }
 
