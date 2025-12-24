@@ -3,6 +3,7 @@
 - timeoutを減らす
     - 追いつかさせる
 - switch-costを減らす
+- 全てtimeoutするバッチはすごく大きくして良い
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える

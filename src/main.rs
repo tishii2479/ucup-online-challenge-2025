@@ -773,7 +773,6 @@ fn create_tasks(
             };
 
             if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
-                && min_time_limit < INF
                 && cur_ids.len() >= MIN_BATCH_SIZE
             {
                 // バッチを分割する
@@ -844,21 +843,21 @@ fn create_tasks(
 #[derive(Clone, Debug)]
 struct Batch {
     time_limits: Vec<i64>,
-    duration: i64,
+    duration: Duration,
     next_t: i64,
 }
 
-fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
+fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (f64, Vec<usize>) {
     struct Context {
         best_order: Vec<usize>,
-        best_timeout: i64,
+        best_timeout: f64,
         next_ts: Vec<i64>,
         cur_ts: Vec<i64>,
         batches: Vec<Batch>,
     }
     impl Context {
-        fn evaluate_timeout(&mut self, order: &Vec<usize>) -> i64 {
-            let mut timeouts = 0;
+        fn evaluate_timeout(&mut self, order: &Vec<usize>) -> f64 {
+            let mut timeouts = 0.;
             for i in 0..self.cur_ts.len() {
                 self.cur_ts[i] = self.next_ts[i];
             }
@@ -872,13 +871,12 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
                     .0;
                 let batch = &self.batches[idx];
                 let start_t = self.cur_ts[core_id].max(batch.next_t);
-                let finish_t = start_t + batch.duration;
+                let lb = (start_t + batch.duration.lower_bound()) as f64;
+                let ub = (start_t + batch.duration.upper_bound()) as f64;
                 for &tl in &batch.time_limits {
-                    if finish_t > tl {
-                        timeouts += 1;
-                    }
+                    timeouts += (1. - (tl as f64 - lb) / (ub - lb)).clamp(0.0, 1.0);
                 }
-                self.cur_ts[core_id] = finish_t;
+                self.cur_ts[core_id] = start_t + batch.duration.estimate();
             }
             timeouts
         }
@@ -886,7 +884,7 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
     let mut order = (0..batches.len()).collect::<Vec<_>>();
     let mut ctx = Context {
         best_order: order.clone(),
-        best_timeout: INF,
+        best_timeout: 1e10,
         next_ts: next_ts.clone(),
         cur_ts: next_ts,
         batches: batches,
@@ -944,9 +942,7 @@ fn task_to_batches(
             .iter()
             .map(|p| state.packets[p.id].as_ref().unwrap().time_limit)
             .collect();
-        let duration = calculator
-            .get_path_duration(task.packet_type, task.packets.len(), 0)
-            .estimate();
+        let duration = calculator.get_path_duration(task.packet_type, task.packets.len(), 0);
         let next_t = task.next_t;
         batches.push(Batch {
             time_limits,
