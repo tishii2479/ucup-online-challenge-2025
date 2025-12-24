@@ -108,10 +108,12 @@ impl Duration {
         self.special_node_count += other.special_node_count;
     }
 
+    #[inline]
     pub fn lower_bound(&self) -> i64 {
         self.fixed
     }
 
+    #[inline]
     pub fn upper_bound(&self) -> i64 {
         self.fixed + self.special_node_count * SPECIAL_COST_SUM
     }

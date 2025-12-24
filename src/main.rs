@@ -34,6 +34,10 @@ fn should_fallback(elapsed: f64) -> bool {
     elapsed > FALLBACK_SEC
 }
 
+fn get_base_max_batch_size(packet_type: usize, _input: &Input, _await_packet_size: usize) -> usize {
+    MAX_BATCH_SIZE[packet_type]
+}
+
 fn get_desired_batch_size(packet_count: usize, base_max_batch_size: usize) -> usize {
     let batch_count = if packet_count % base_max_batch_size <= base_max_batch_size / 2 {
         packet_count / base_max_batch_size
@@ -498,14 +502,27 @@ fn complete_task(
                 continue;
             }
 
+            let task_end_t = task.next_t
+                + estimate_task_duration(&task, input, graph, &state.packet_special_cost)
+                    .estimate();
+            let task1_end_t = task1.next_t
+                + estimate_task_duration(&task1, input, graph, &state.packet_special_cost)
+                    .estimate();
+            let task2_duration =
+                estimate_task_duration(&task2, input, graph, &state.packet_special_cost);
+            let task2_end_t = task2.next_t + task2_duration.estimate();
+
+            if task_end_t <= task1_end_t.max(task2_end_t) {
+                continue;
+            }
+
             if first_cand.is_none() {
                 first_cand = Some((other_core_id, task.next_t, task1, task2));
                 continue;
             }
 
-            let task2_end_t = task2.next_t
-                + estimate_task_duration(&task2, input, graph, &state.packet_special_cost)
-                    .upper_bound();
+            let task2_end_t = task2.next_t + task2_duration.upper_bound();
+
             if task2_end_t <= first_cand.as_ref().unwrap().1 {
                 first_cand = Some((other_core_id, task.next_t, task1, task2));
                 break;
@@ -725,7 +742,8 @@ fn create_tasks(
             }
         });
 
-        let base_max_batch_size = MAX_BATCH_SIZE[packet_type];
+        let base_max_batch_size =
+            get_base_max_batch_size(packet_type, input, state.await_packets.size());
         let mut max_batch_size = base_max_batch_size;
 
         if state.is_received_all() {
@@ -755,6 +773,7 @@ fn create_tasks(
             };
 
             if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+                && min_time_limit < INF
                 && cur_ids.len() >= MIN_BATCH_SIZE
             {
                 // バッチを分割する
@@ -936,32 +955,4 @@ fn task_to_batches(
         });
     }
     batches
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    impl Batch {
-        fn new(time_limits: Vec<i64>, duration: i64, next_t: i64) -> Self {
-            Self {
-                time_limits,
-                duration,
-                next_t,
-            }
-        }
-    }
-
-    #[test]
-    fn test_optimize_task() {
-        let next_ts = vec![10, 20];
-        let batches = vec![
-            Batch::new(vec![50, 65], 5, 20),
-            Batch::new(vec![20], 10, 10),
-            Batch::new(vec![35, 45], 20, 20),
-            Batch::new(vec![30, 55], 10, 10),
-        ];
-        let order = optimize_task(next_ts, batches);
-        println!("order: {:?}", order);
-    }
 }

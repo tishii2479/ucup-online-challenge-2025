@@ -1,6 +1,8 @@
 ## TODO
 - batch-sizeを大きくしたい
--
+- timeoutを減らす
+    - 追いつかさせる
+- switch-costを減らす
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える
