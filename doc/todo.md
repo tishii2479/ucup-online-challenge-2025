@@ -1,28 +1,16 @@
-2%伸ばしたい!
-
-
 ## TODO
-must
-- バッチの作り方
-    - optimize-task
-    - create-task
 - taskをもらってくるところの改善
-    - 終わった時に実際にタスクを渡す
     - タスクを持ってくる前に、終わる前に終わらせられるタスクを先にやる
+- packet_typeごとに均等にタスクを作る
+- packet_typeが一つしかないケースを見る
 - パラメータ
     - batch-size
+        - n, n_cores, packet-typeごとに変える
     - alpha
-- 時間の管理
-    - thresholdをいくつか提出する
-
-want
-- insertをうまくやる
 
 ## LAST
 - TRACK=false, eprintlnを消す
 - 安全なawait_intervalを提出する
-- batch-size, alphaを変えてたくさん提出する
-    - パラメータのチューニング
-        - `max_batch_size`: `n_cores, n, packet_type` ごとに良いバッチサイズがあるはず
-        - `alpha`
+- 安全なthresholdで提出する
+- batch-size, alphaを変えて提出する
 - 最後はbest provisional scoreを提出する

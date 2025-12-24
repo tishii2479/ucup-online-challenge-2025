@@ -9,6 +9,6 @@ for seed in {0..0}; do
     # python gen.py --seed $seed --n 10000 --n-cores 32 --arrive-term 10000 --arrive-start 4900000 > in/test.txt
     # python gen.py --seed $seed --n 200 --n-cores 32 --arrive-term 200 --arrive-start 3000000 > in/test.txt
     # python gen.py --seed $seed --n 10000 --n-cores 32 --arrive-term 10000 --arrive-start 1000 > in/test.txt
-    python gen.py --seed $seed --n 5000 --n-cores 32 --arrive-term 10000 --arrive-start 1000 > in/test.txt
+    python gen.py --seed $seed --n 1000 --n-cores 4 --arrive-term 30000 --arrive-start 1000 > in/test.txt
     time python3 problem/interactive_runner.py ./problem/interactor.o in/test.txt out.txt -- cargo run --release
 done

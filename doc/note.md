@@ -317,11 +317,11 @@ evaluation:
 
 registered_task[core_id] = {
     Receive(i64), // start_t
-    Give(Vec<usize>), // [ids]
+    Give(Vec<usize>), // [core_ids]
 }
 - process-taskの時に分け与える
 
-## タスクを持ってくる前に、終わる前に終わらせられるタスクを先にやる
+## タスクを持ってくる前に、終わらせられるタスクを先にやる
 
 - 分けられることが決まったら、Receiveに間に合う限りはタスクをこなす
 - complete-taskで新しいタスクをもらうときに確認をする

@@ -143,7 +143,7 @@ impl State {
             next_tasks: vec![None; input.n_cores],
             await_packets: IndexSet::empty(n),
             received_packets: IndexSet::empty(n),
-            last_received_t: -INF,
+            last_received_t: 0,
         }
     }
 
@@ -472,12 +472,14 @@ fn complete_task(
         // コアごとに保持している処理が終了するまでの時間が長い順に試す
         other_cores.sort_unstable_by_key(|&(_, duration)| Reverse(cur_t + duration));
 
+        let mut first_cand = None;
+
         for (other_core_id, _) in other_cores {
             let Some(task) = &state.next_tasks[other_core_id] else {
                 continue;
             };
 
-            let Some((task1, mut task2)) = split_task(cur_t, task) else {
+            let Some((task1, task2)) = split_task(cur_t, task) else {
                 continue;
             };
 
@@ -486,6 +488,21 @@ fn complete_task(
                 continue;
             }
 
+            if first_cand.is_none() {
+                first_cand = Some((other_core_id, task.next_t, task1, task2));
+                continue;
+            }
+
+            let task2_end_t = task2.next_t
+                + estimate_task_duration(&task2, input, graph, &state.packet_special_cost)
+                    .upper_bound();
+            if task2_end_t <= first_cand.as_ref().unwrap().1 {
+                first_cand = Some((other_core_id, task.next_t, task1, task2));
+                break;
+            }
+        }
+
+        if let Some((other_core_id, _, task1, mut task2)) = first_cand {
             // NOTE: other_core_idはすでにqに追加されているのでq.pushは不要
             state.next_tasks[other_core_id] = Some(task1);
 
@@ -496,7 +513,6 @@ fn complete_task(
 
             q.push((Reverse(task2.next_t), Event::ResumeCore(core_id)));
             state.next_tasks[core_id] = Some(task2);
-            break;
         }
     }
 
