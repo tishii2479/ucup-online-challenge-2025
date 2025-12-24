@@ -17,7 +17,7 @@ const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B * 3 / 2, B, B, B, B, B, B * 3 / 2];
 const MIN_BATCH_SIZE: usize = 2;
-const ALPHA: f64 = 0.8;
+const ALPHA: f64 = 0.6;
 const SPECIAL_NODE_CHUNK: usize = 4;
 
 const PERMUTE_TASK_THRESHOLD: usize = 6;
@@ -356,7 +356,14 @@ fn process_task(
     {
         get_special_node_chunk_size(cur_task)
     } else {
-        graph.nodes[node_id].costs.len() - 1
+        let max_bs = graph.nodes[node_id].costs.len() - 1;
+        let bs = cur_task.packets.len();
+        if bs <= max_bs {
+            bs
+        } else {
+            let bs_cnt = bs.div_ceil(max_bs).max(1);
+            bs.div_ceil(bs_cnt)
+        }
     };
 
     let cur_task = state.next_tasks[core_id]
