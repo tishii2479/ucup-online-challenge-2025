@@ -1,4 +1,6 @@
 ## TODO
+- batch-sizeを大きくしたい
+-
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える

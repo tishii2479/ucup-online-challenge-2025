@@ -12,9 +12,8 @@ const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 const FALLBACK_SEC: f64 = 10.;
 
-const B: usize = 20;
-const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] =
-    [B * 3 / 2, B * 2 / 3, B, B, B * 2 / 3, B, B * 3 / 2];
+const B: usize = 16;
+const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B * 3 / 2, B, B, B, B, B, B * 3 / 2];
 const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
 const SPECIAL_NODE_CHUNK: usize = 4;
