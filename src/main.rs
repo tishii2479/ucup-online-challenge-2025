@@ -8,6 +8,7 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
+const REDIRECT_STDERR: bool = false;
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 const FALLBACK_SEC: f64 = 10.;
@@ -114,7 +115,7 @@ fn should_chunk_special_node_task(
 }
 
 fn main() {
-    let io = StdIO::new(false);
+    let io = StdIO::new(REDIRECT_STDERR);
     let mut interactor = IOInteractor::new(io);
     let graph = interactor.read_graph();
     let input = interactor.read_input();
@@ -224,6 +225,13 @@ impl Solver for GreedySolver {
                     );
                 }
                 Event::ResumeCore(core_id) => {
+                    // insertでexpireしている場合
+                    if let Some(cur_task) = &state.next_tasks[core_id] {
+                        if t.0 < cur_task.next_t {
+                            continue;
+                        }
+                    }
+
                     // タスクが完了したか確認する
                     if let Some(cur_task) = &state.next_tasks[core_id] {
                         if cur_task.path_index >= graph.paths[cur_task.packet_type].path.len() {
@@ -472,19 +480,22 @@ fn complete_task(
         return;
     }
 
+    for other_core_id in 0..input.n_cores {
+        if other_core_id == core_id {
+            continue;
+        }
+        if let Some(mut task) = state.idle_tasks[other_core_id].take() {
+            q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
+            task.packets
+                .iter_mut()
+                .for_each(|p| p.is_switching_core = true);
+            state.next_tasks[core_id] = Some(task);
+            return;
+        }
+    }
+
     // 最も優先度の高いタスクを割り当てて開始する
     if state.await_packets.size() > 0 {
-        for other_core_id in 0..input.n_cores {
-            if other_core_id == core_id {
-                continue;
-            }
-            if let Some(task) = state.idle_tasks[other_core_id].take() {
-                q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
-                state.next_tasks[core_id] = Some(task);
-                return;
-            }
-        }
-
         let mut tasks = create_tasks(
             &state,
             cur_t,
@@ -669,9 +680,10 @@ fn split_task(cur_t: i64, task: &Task) -> Option<(Task, Task)> {
 fn insert_interrupt_tasks(
     mut tasks: Vec<Task>,
     cur_t: i64,
-    state: &State,
+    state: &mut State,
     input: &Input,
     graph: &Graph,
+    q: &mut EventQueue,
 ) {
     fn calc_e_timeout(task: &Task, cur_t: i64, state: &State, input: &Input, graph: &Graph) -> f64 {
         let task_duration = estimate_task_duration(&task, input, graph, &state.packet_special_cost);
@@ -705,6 +717,9 @@ fn insert_interrupt_tasks(
 
         let mut cands = vec![];
         for core_id in 0..input.n_cores {
+            if state.idle_tasks[core_id].is_some() {
+                continue;
+            }
             let Some(cur_task) = &state.next_tasks[core_id] else {
                 continue;
             };
@@ -726,7 +741,6 @@ fn insert_interrupt_tasks(
         }
 
         if cands.is_empty() {
-            eprintln!("insert task: none");
             continue;
         }
 
@@ -735,10 +749,26 @@ fn insert_interrupt_tasks(
             .min_by(|&(_, e1), &(_, e2)| e1.partial_cmp(&e2).unwrap())
             .unwrap();
 
+        let cur_task = state.next_tasks[insert_core_id].take().unwrap();
         eprintln!(
-            "insert task: core_id={}, e_timeout={:.6} -> {:.6}",
-            insert_core_id, cur_e_timeout, e_timeout
+            "insert task: core_id={:3}, e_timeout={:.6} -> {:.6} ({:.6})",
+            insert_core_id,
+            cur_e_timeout,
+            e_timeout,
+            e_timeout - cur_e_timeout
         );
+
+        let insert_task_start_t = cur_task.next_t.max(insert_task.next_t);
+
+        for &p in &insert_task.packets {
+            state.await_packets.remove(p.id);
+        }
+        state.idle_tasks[insert_core_id] = Some(cur_task);
+        state.next_tasks[insert_core_id] = Some(insert_task);
+        q.push((
+            Reverse(insert_task_start_t),
+            Event::ResumeCore(insert_core_id),
+        ));
 
         start_ts[insert_core_id] += insert_task_duration.estimate();
     }
@@ -788,8 +818,7 @@ fn receive_packet(
         }
     }
 
-    // TODO: insert
-    insert_interrupt_tasks(tasks, cur_t, state, input, graph);
+    insert_interrupt_tasks(tasks, cur_t, state, input, graph, q);
 
     // 全てのパケットを受信していれば次の受信イベントは登録しない
     if state.is_received_all() {
