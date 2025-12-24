@@ -33,8 +33,17 @@ fn should_fallback(elapsed: f64) -> bool {
     elapsed > FALLBACK_SEC
 }
 
+fn get_desired_batch_size(packet_count: usize, base_max_batch_size: usize) -> usize {
+    let batch_count = if packet_count % base_max_batch_size <= base_max_batch_size / 2 {
+        packet_count / base_max_batch_size
+    } else {
+        packet_count / base_max_batch_size + 1
+    };
+    packet_count.div_ceil(batch_count.max(1))
+}
+
 fn get_special_node_chunk_size(cur_task: &Task) -> usize {
-    ((cur_task.packets.len() + SPECIAL_NODE_CHUNK - 1) / SPECIAL_NODE_CHUNK).max(1)
+    cur_task.packets.len().div_ceil(SPECIAL_NODE_CHUNK).max(1)
 }
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
@@ -715,13 +724,21 @@ fn create_tasks(
             }
         });
 
-        let mut cur_ids = vec![];
+        let base_max_batch_size = B;
+        let mut max_batch_size = base_max_batch_size;
+
+        if state.is_received_all() {
+            // 全てのパケットを受信していたら、均等になるようにバッチサイズを決める
+            max_batch_size =
+                get_desired_batch_size(packets[packet_type].len(), base_max_batch_size);
+        }
 
         // timeoutしていないパケットでだけ集計する
         let mut min_time_limit = INF;
         let mut max_received_t = -INF;
+        let mut cur_ids = Vec::with_capacity(base_max_batch_size);
 
-        for &packet in packets[packet_type].iter() {
+        for (i, &packet) in packets[packet_type].iter().enumerate() {
             let new_duration = calculator
                 .get_path_duration(packet.packet_type, cur_ids.len() + 1, 0)
                 .estimate();
@@ -736,13 +753,21 @@ fn create_tasks(
                 min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
-            if (changed_to_timeout_batch || cur_ids.len() >= B) && cur_ids.len() >= MIN_BATCH_SIZE {
+            if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+                && cur_ids.len() >= MIN_BATCH_SIZE
+            {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
                 cur_ids.clear();
                 min_time_limit = INF;
                 max_received_t = -INF;
+
+                if state.is_received_all() {
+                    // 全てのパケットを受信していたら、均等になるようにバッチサイズを決める
+                    max_batch_size =
+                        get_desired_batch_size(packets[packet_type].len() - i, base_max_batch_size);
+                }
             }
 
             if !is_timeouted_packet {
