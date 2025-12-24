@@ -5,14 +5,70 @@ import subprocess
 import pandas as pd
 
 CASES = [
-    {"seed": 0, "n": 200, "n_cores": 1, "arrive_terms": 10},
-    {"seed": 1, "n": 200, "n_cores": 2, "arrive_terms": 10},
-    {"seed": 2, "n": 1000, "n_cores": 4, "arrive_terms": 1000},
-    {"seed": 3, "n": 1000, "n_cores": 8, "arrive_terms": 1000},
-    {"seed": 4, "n": 1000, "n_cores": 16, "arrive_terms": 1000},
-    {"seed": 5, "n": 1000, "n_cores": 32, "arrive_terms": 1000},
-    {"seed": 6, "n": 200, "n_cores": 4, "arrive_terms": 1000},
-    {"seed": 7, "n": 2000, "n_cores": 4, "arrive_terms": 5000},
+    {
+        "seed": 0,
+        "n": 200,
+        "n_cores": 1,
+        "arrive_terms": 10,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 1,
+        "n": 200,
+        "n_cores": 2,
+        "arrive_terms": 10,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 2,
+        "n": 1000,
+        "n_cores": 4,
+        "arrive_terms": 1000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 3,
+        "n": 1000,
+        "n_cores": 8,
+        "arrive_terms": 1000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 4,
+        "n": 1000,
+        "n_cores": 16,
+        "arrive_terms": 1000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 5,
+        "n": 1000,
+        "n_cores": 32,
+        "arrive_terms": 1000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 6,
+        "n": 200,
+        "n_cores": 4,
+        "arrive_terms": 1000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
+    {
+        "seed": 7,
+        "n": 2000,
+        "n_cores": 4,
+        "arrive_terms": 5000,
+        "arrive_start": 1000,
+        "packet_types": 7,
+    },
 ]
 
 
@@ -40,7 +96,10 @@ def main() -> None:
         in_file = f"{str(case['seed']).zfill(4)}"
         print(
             f"\n--- Running case: n={case['n']}, n_cores={case['n_cores']}, "
-            f"arrive_terms={case['arrive_terms']} ({in_file}) ---"
+            f"arrive_terms={case['arrive_terms']}, "
+            f"arrive_start={case['arrive_start']}, "
+            f"packet_types={case['packet_types']}, "
+            f"({in_file}) ---"
         )
         subprocess.run(
             [
@@ -54,6 +113,10 @@ def main() -> None:
                 str(case["n_cores"]),
                 "--arrive-term",
                 str(case["arrive_terms"]),
+                "--arrive-start",
+                str(case["arrive_start"]),
+                "--packet-types",
+                str(case["packet_types"]),
             ],
             stdout=open(f"in/{in_file}.txt", "w"),
         )

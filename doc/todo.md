@@ -1,26 +1,15 @@
 ## TODO
 - batch-sizeを大きくしたい
-- timeoutを減らす
-    - 追いつかさせる
 - switch-costを減らす
-- 全てtimeoutするバッチはすごく大きくして良い
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える
     - alpha
 
-## 変数
-- select-task
-    - batch-size
-    - packet-type
-- switch-task
-    - from-core
-    - split-size
-- insert
-
 ## LAST
 - TRACK=false, eprintlnを消す
-- 安全なawait_intervalを提出する
+- await_intervalを提出する
+    - [20, 30, 40, 60, 100]
 - 安全なthresholdで提出する
 - batch-size, alphaを変えて提出する
 - 最後はbest provisional scoreを提出する

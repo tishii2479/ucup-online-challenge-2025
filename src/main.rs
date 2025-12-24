@@ -11,6 +11,8 @@ use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, lib
 const TRACKER_ENABLED: bool = true;
 const INF: i64 = 1_000_000_000_000;
 const FALLBACK_SEC: f64 = 10.;
+const MIN_AWAIT_INTERVAL: i64 = 40;
+const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
 
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B * 3 / 2, B, B, B, B, B, B * 3 / 2];
@@ -52,9 +54,6 @@ fn get_special_node_chunk_size(cur_task: &Task) -> usize {
 }
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
-    const MIN_AWAIT_INTERVAL: i64 = 40;
-    const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
-
     let is_receiving = cur_t <= state.last_received_t + LAST_RECEIVED_T_THRESHOLD
         && state.received_packets.size() > 0;
     if is_receiving {
@@ -655,7 +654,7 @@ fn receive_packet(
     let n_idle_cores = (0..input.n_cores)
         .filter(|core_id| state.next_tasks[*core_id].is_none())
         .count();
-    if n_idle_cores > 0 {
+    if n_idle_cores > 0 && state.last_received_t == cur_t {
         // packet_typeごとにタスクを作成して、優先度を計算する
         let top_k = RECEIVE_TASK_TOP_K.max(n_idle_cores);
         let mut tasks = create_tasks(&state, cur_t, input, graph, &calculator, top_k);
