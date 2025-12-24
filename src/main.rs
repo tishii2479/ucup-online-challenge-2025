@@ -40,10 +40,6 @@ fn should_fallback(elapsed: f64) -> bool {
     elapsed > FALLBACK_SEC
 }
 
-fn get_should_split_batch(_packet_count: usize, e_timeout_sum: f64) -> bool {
-    e_timeout_sum > 0.01
-}
-
 fn get_base_max_batch_size(packet_type: usize, _input: &Input, _await_packet_size: usize) -> usize {
     MAX_BATCH_SIZE[packet_type]
 }
@@ -724,13 +720,13 @@ fn create_tasks(
         (received_t + cost_r).max(cur_t)
     }
     fn is_timeouted(packet: &Packet, cur_t: i64, cost_r: i64, min_duration: &Duration) -> bool {
-        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.lower_bound()
+        packet.time_limit < next_t(packet.received_t, cur_t, cost_r) + min_duration.estimate()
     }
 
-    let mut push_task = |packet_type: usize, cur_ids: &Vec<(usize, i64)>| {
+    let mut push_task = |packet_type: usize, cur_ids: &Vec<usize>, min_time_limit: i64| {
         // timeoutしたものは無視されているので、ここでmax_received_tを計算し直す
         let mut max_received_t = -INF;
-        for &(id, _) in cur_ids {
+        for &id in cur_ids {
             let packet = state.packets[id].as_ref().unwrap();
             max_received_t = max_received_t.max(packet.received_t);
         }
@@ -739,7 +735,6 @@ fn create_tasks(
             .get_path_duration(packet_type, cur_ids.len(), 0)
             .estimate();
         let next_t = next_t(max_received_t, cur_t, input.cost_r);
-        let min_time_limit = cur_ids.iter().map(|&(_, tl)| tl).min().unwrap();
         let afford = min_time_limit - (next_t + batch_duration);
         tasks.push((afford, max_received_t, packet_type, cur_ids.clone()));
     };
@@ -767,28 +762,35 @@ fn create_tasks(
         }
 
         // timeoutしていないパケットでだけ集計する
+        let mut min_time_limit = INF;
+        let mut max_received_t = -INF;
         let mut cur_ids = Vec::with_capacity(base_max_batch_size);
 
         for (i, &packet) in packets[packet_type].iter().enumerate() {
-            let new_duration =
-                calculator.get_path_duration(packet.packet_type, cur_ids.len() + 1, 0);
+            let new_duration = calculator
+                .get_path_duration(packet.packet_type, cur_ids.len() + 1, 0)
+                .estimate();
             let is_timeouted_packet = is_timeouted(&packet, cur_t, input.cost_r, &min_duration);
-            let mut e_timeout_sum = cur_ids
-                .iter()
-                .map(|(_, tl)| new_duration.e_timeout(*tl))
-                .filter(|&e| e < 1.) // timeoutしているものは無視する
-                .sum::<f64>();
-            if !is_timeouted_packet {
-                e_timeout_sum += new_duration.e_timeout(packet.time_limit);
-            }
-            let should_split = get_should_split_batch(cur_ids.len(), e_timeout_sum)
-                && cur_ids.len() >= MIN_BATCH_SIZE;
+            let changed_to_timeout_batch = if is_timeouted_packet {
+                // そもそも間に合わないパケットは無視して、バッチを分割しなくて良い
+                // バッチサイズが大きくなることで、既存のパケットがtimeoutする場合は分割する
+                let next_t = next_t(max_received_t, cur_t, input.cost_r);
+                min_time_limit < next_t + new_duration && cur_ids.len() >= 1
+            } else {
+                let next_t = next_t(packet.received_t.max(max_received_t), cur_t, input.cost_r);
+                min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
+            };
 
-            if should_split || cur_ids.len() >= max_batch_size {
+            if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+                && min_time_limit < INF
+                && cur_ids.len() >= MIN_BATCH_SIZE
+            {
                 // バッチを分割する
-                push_task(packet_type, &cur_ids);
+                push_task(packet_type, &cur_ids, min_time_limit);
 
                 cur_ids.clear();
+                min_time_limit = INF;
+                max_received_t = -INF;
 
                 if state.is_received_all() {
                     // 全てのパケットを受信していたら、均等になるようにバッチサイズを決める
@@ -797,16 +799,20 @@ fn create_tasks(
                 }
             }
 
-            cur_ids.push((packet.i, packet.time_limit));
+            if !is_timeouted_packet {
+                min_time_limit = min_time_limit.min(packet.time_limit);
+                max_received_t = max_received_t.max(packet.received_t);
+            }
+            cur_ids.push(packet.i);
         }
 
         // 残っているidsでタスクを作成する
         if cur_ids.len() > 0 {
-            push_task(packet_type, &cur_ids);
+            push_task(packet_type, &cur_ids, min_time_limit);
         }
     }
 
-    // 優先度が高い順にソートする
+    // 優先度が低い順にソートする（後ろほど優先度が高い、stackとして扱う）
     tasks.sort_unstable_by_key(|&(afford, _, _, _)| afford);
     let tasks = tasks
         .into_iter()
@@ -819,7 +825,7 @@ fn create_tasks(
                 is_chunked: false,
                 packets: ids
                     .into_iter()
-                    .map(|(id, _)| PacketStatus {
+                    .map(|id| PacketStatus {
                         id,
                         is_advanced: false,
                         is_switching_core: true, // 最初はcore=0から必ずコアを移る
