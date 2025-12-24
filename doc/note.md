@@ -324,3 +324,13 @@ registered_task[core_id] = {
 
 - 分けられることが決まったら、Receiveに間に合う限りはタスクをこなす
 - complete-taskで新しいタスクをもらうときに確認をする
+
+## 変数
+- select-task
+    - batch-size
+    - packet-type
+- switch-task
+    - from-core
+    - split-size
+- insert
+

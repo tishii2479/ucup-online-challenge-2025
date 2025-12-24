@@ -1,19 +1,20 @@
 ## TODO
-- insert-task
 - create-taskでも期待値を計算する
+    - e_timeout := \sum e_timeout / n
+    - contition: e_timeout < th
+        - th := 0.01
+    - priority: e_timeout
+- insert-taskを追加する
+    - create-taskでタスクを作る
+    - 割り当てられなかったタスクの上位k個をcore_idに挿入することを試す
+    - min(diff e_timeout) < 0 なら、そのcore_idに挿入する
+- node=8にinsertを追加する
+
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える
     - alpha
 
-## 変数
-- select-task
-    - batch-size
-    - packet-type
-- switch-task
-    - from-core
-    - split-size
-- insert
 
 ## LAST
 - TRACK=false, eprintlnを消す
