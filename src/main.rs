@@ -8,16 +8,16 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{calculator::*, core::*, fallback::FallbackSolver, interactor::*, libb::*};
 
-const TRACKER_ENABLED: bool = true;
+const TRACKER_ENABLED: bool = false;
 const INF: i64 = 1_000_000_000_000;
 const FALLBACK_SEC: f64 = 10.;
-const MIN_AWAIT_INTERVAL: i64 = 40;
+const MIN_AWAIT_INTERVAL: i64 = 33;
 const LAST_RECEIVED_T_THRESHOLD: i64 = 100_000;
 
 const B: usize = 16;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B * 3 / 2, B, B, B, B, B, B * 3 / 2];
 const MIN_BATCH_SIZE: usize = 2;
-const ALPHA: f64 = 0.6;
+const ALPHA: f64 = 0.8;
 const SPECIAL_NODE_CHUNK: usize = 4;
 
 const PERMUTE_TASK_THRESHOLD: usize = 6;

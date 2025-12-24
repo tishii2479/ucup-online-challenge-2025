@@ -7,9 +7,7 @@
     - alpha
 
 ## LAST
-- TRACK=false, eprintlnを消す
-- await_intervalを提出する
-    - [20, 30, 40, 60, 100]
 - 安全なthresholdで提出する
+    - 1.5
 - batch-size, alphaを変えて提出する
 - 最後はbest provisional scoreを提出する
