@@ -1,9 +1,17 @@
 ## TODO
-- packet_typeごとに均等にタスクを作る
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える
     - alpha
+
+## 変数
+- select-task
+    - batch-size
+    - packet-type
+- switch-task
+    - from-core
+    - split-size
+- insert
 
 ## LAST
 - TRACK=false, eprintlnを消す
