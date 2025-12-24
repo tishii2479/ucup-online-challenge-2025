@@ -78,6 +78,9 @@ fn should_chunk_special_node_task(
     if state.await_packets.size() > 0 {
         return false;
     }
+    if cur_task.packets.len() >= graph.nodes[node_id].costs.len() {
+        return true;
+    }
 
     let dt = graph.nodes[node_id].costs[cur_task.packets.len()]
         + cur_task
@@ -773,6 +776,7 @@ fn create_tasks(
             };
 
             if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+                && min_time_limit < INF
                 && cur_ids.len() >= MIN_BATCH_SIZE
             {
                 // バッチを分割する

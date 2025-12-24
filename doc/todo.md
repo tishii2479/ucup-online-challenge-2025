@@ -1,9 +1,6 @@
 ## TODO
-- batch-sizeを大きくしたい
-- timeoutを減らす
-    - 追いつかさせる
-- switch-costを減らす
-- 全てtimeoutするバッチはすごく大きくして良い
+- insert-task
+- create-taskでも期待値を計算する
 - パラメータ
     - batch-size
         - n, n_cores, packet-typeごとに変える
