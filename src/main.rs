@@ -14,10 +14,12 @@ const INF: i64 = 1_000_000_000_000;
 const FALLBACK_SEC: f64 = 10.;
 
 const B: usize = 16;
+const BATCH_SIZE_LIMIT: usize = 64;
 const MAX_BATCH_SIZE: [usize; N_PACKET_TYPE] = [B * 3 / 2, B, B, B, B, B, B * 3 / 2];
 const MIN_BATCH_SIZE: usize = 2;
 const ALPHA: f64 = 0.8;
 const SPECIAL_NODE_CHUNK: usize = 4;
+const SPECIAL_NODE_MAX_BATCH_SIZE: usize = 32;
 
 const INSERT_E_TIMEOUT_THRESHOLD: f64 = 0.5;
 
@@ -57,7 +59,6 @@ fn get_desired_batch_size(packet_count: usize, base_max_batch_size: usize) -> us
 }
 
 fn get_special_node_chunk_size(cur_task: &Task) -> usize {
-    const SPECIAL_NODE_MAX_BATCH_SIZE: usize = 64;
     cur_task
         .packets
         .len()
@@ -92,8 +93,8 @@ fn should_chunk_special_node_task(
     if state.await_packets.size() > 0 {
         return false;
     }
-    if cur_task.packets.len() >= graph.nodes[node_id].costs.len() {
-        return true;
+    if cur_task.packets.len() >= SPECIAL_NODE_MAX_BATCH_SIZE {
+        return false;
     }
 
     let dt = graph.nodes[node_id].costs[cur_task.packets.len()]
@@ -476,8 +477,9 @@ fn complete_task(
     state.next_tasks[core_id] = None;
 
     // idle_tasksからタスクを取得する
-    if let Some(task) = state.idle_tasks[core_id].take() {
+    if let Some(mut task) = state.idle_tasks[core_id].take() {
         q.push((Reverse(cur_t), Event::ResumeCore(core_id)));
+        task.next_t = cur_t;
         state.next_tasks[core_id] = Some(task);
         return;
     }
@@ -876,7 +878,7 @@ fn receive_packet(
         }
     }
 
-    insert_interrupt_tasks(tasks, cur_t, state, input, graph, q);
+    // insert_interrupt_tasks(tasks, cur_t, state, input, graph, q);
 
     // 全てのパケットを受信していれば次の受信イベントは登録しない
     if state.is_received_all() {
@@ -974,10 +976,10 @@ fn create_tasks(
                 min_time_limit.min(packet.time_limit) < next_t + new_duration && cur_ids.len() >= 1
             };
 
-            if (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
+            let should_split = (changed_to_timeout_batch || cur_ids.len() >= max_batch_size)
                 && min_time_limit < INF
-                && cur_ids.len() >= MIN_BATCH_SIZE
-            {
+                && cur_ids.len() >= MIN_BATCH_SIZE;
+            if cur_ids.len() >= BATCH_SIZE_LIMIT || should_split {
                 // バッチを分割する
                 push_task(packet_type, &cur_ids, min_time_limit);
 
