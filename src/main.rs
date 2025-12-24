@@ -808,28 +808,32 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
         best_order: Vec<usize>,
         best_timeout: i64,
         next_ts: Vec<i64>,
+        cur_ts: Vec<i64>,
         batches: Vec<Batch>,
     }
     impl Context {
-        fn evaluate_timeout(&self, order: &Vec<usize>) -> i64 {
+        fn evaluate_timeout(&mut self, order: &Vec<usize>) -> i64 {
             let mut timeouts = 0;
-            let mut cur_ts = self.next_ts.clone();
+            for i in 0..self.cur_ts.len() {
+                self.cur_ts[i] = self.next_ts[i];
+            }
             for &idx in order {
-                let core_id = cur_ts
+                let core_id = self
+                    .cur_ts
                     .iter()
                     .enumerate()
                     .min_by_key(|&(_, &t)| t)
                     .unwrap()
                     .0;
                 let batch = &self.batches[idx];
-                let start_t = cur_ts[core_id].max(batch.next_t);
+                let start_t = self.cur_ts[core_id].max(batch.next_t);
                 let finish_t = start_t + batch.duration;
                 for &tl in &batch.time_limits {
                     if finish_t > tl {
                         timeouts += 1;
                     }
                 }
-                cur_ts[core_id] = finish_t;
+                self.cur_ts[core_id] = finish_t;
             }
             timeouts
         }
@@ -838,7 +842,8 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (i64, Vec<usize>) {
     let mut ctx = Context {
         best_order: order.clone(),
         best_timeout: INF,
-        next_ts: next_ts,
+        next_ts: next_ts.clone(),
+        cur_ts: next_ts,
         batches: batches,
     };
     ctx.best_timeout = ctx.evaluate_timeout(&order);
