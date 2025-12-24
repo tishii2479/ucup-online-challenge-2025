@@ -29,9 +29,9 @@ impl Duration {
             .round() as i64
     }
 
-    fn e_timeout(&self, tl: i64) -> f64 {
-        let lb = self.lower_bound() as f64;
-        let ub = self.upper_bound() as f64;
+    fn e_timeout(&self, start_t: i64, tl: i64) -> f64 {
+        let lb = start_t as f64 + self.lower_bound() as f64;
+        let ub = start_t as f64 + self.upper_bound() as f64;
         (1. - (tl as f64 - lb) / (ub - lb)).clamp(0., 1.)
     }
 }
@@ -54,7 +54,12 @@ fn get_desired_batch_size(packet_count: usize, base_max_batch_size: usize) -> us
 }
 
 fn get_special_node_chunk_size(cur_task: &Task) -> usize {
-    cur_task.packets.len().div_ceil(SPECIAL_NODE_CHUNK).max(1)
+    const SPECIAL_NODE_MAX_BATCH_SIZE: usize = 64;
+    cur_task
+        .packets
+        .len()
+        .div_ceil(SPECIAL_NODE_CHUNK)
+        .clamp(1, SPECIAL_NODE_MAX_BATCH_SIZE)
 }
 
 fn get_receive_dt(cur_t: i64, state: &State, input: &Input) -> i64 {
@@ -882,7 +887,7 @@ fn optimize_task(next_ts: Vec<i64>, batches: Vec<Batch>) -> (f64, Vec<usize>) {
                 let batch = &self.batches[idx];
                 let start_t = self.cur_ts[core_id].max(batch.next_t);
                 for &tl in &batch.time_limits {
-                    timeouts += batch.duration.e_timeout(tl);
+                    timeouts += batch.duration.e_timeout(start_t, tl);
                 }
                 self.cur_ts[core_id] = start_t + batch.duration.estimate();
             }
